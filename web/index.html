@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>凌晨鲜花批发市场 · 竞价分货与损耗服务</title>
+<style>
+  :root { --bg:#0f141b; --card:#1a2230; --line:#2a3547; --txt:#e8eef7; --dim:#8fa0b8;
+          --acc:#ff5d8f; --acc2:#3ec6a7; --warn:#ffb020; --bad:#ff6b6b; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+         background:var(--bg); color:var(--txt); }
+  header { display:flex; align-items:center; gap:12px; padding:12px 20px; background:var(--card);
+           border-bottom:1px solid var(--line); position:sticky; top:0; z-index:9; }
+  header h1 { font-size:17px; margin:0; }
+  header .who { margin-left:auto; color:var(--dim); font-size:13px; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:7px 14px;
+           cursor:pointer; font-size:13px; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--txt); }
+  button.small { padding:3px 9px; font-size:12px; }
+  button.green { background:var(--acc2); }
+  button.warn { background:var(--warn); color:#222; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  input,select,textarea { background:#0d1219; color:var(--txt); border:1px solid var(--line);
+           border-radius:7px; padding:7px 9px; font-size:13px; }
+  label { font-size:12px; color:var(--dim); display:block; margin:8px 0 3px; }
+  .layout { display:flex; min-height:calc(100vh - 53px); }
+  nav { width:168px; padding:14px 10px; border-right:1px solid var(--line); flex-shrink:0; }
+  nav a { display:block; padding:9px 12px; border-radius:8px; color:var(--dim); cursor:pointer;
+          font-size:14px; margin-bottom:4px; text-decoration:none; }
+  nav a.on { background:var(--acc); color:#fff; }
+  main { flex:1; padding:18px 22px; overflow-x:auto; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+          padding:16px; margin-bottom:16px; }
+  .card h3 { margin:0 0 12px; font-size:15px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { padding:7px 8px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
+  th { color:var(--dim); font-weight:500; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:99px; font-size:12px;
+           background:#26314a; color:var(--dim); }
+  .badge.g { background:rgba(62,198,167,.18); color:var(--acc2); }
+  .badge.y { background:rgba(255,176,32,.16); color:var(--warn); }
+  .badge.r { background:rgba(255,107,107,.16); color:var(--bad); }
+  .badge.p { background:rgba(255,93,143,.16); color:var(--acc); }
+  .grid { display:grid; gap:14px; }
+  .grid.c4 { grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; }
+  .stat .n { font-size:24px; font-weight:600; }
+  .stat .t { color:var(--dim); font-size:12px; margin-top:4px; }
+  .bar { height:8px; background:#0d1219; border-radius:99px; overflow:hidden; }
+  .bar i { display:block; height:100%; background:var(--acc2); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:end; }
+  .muted { color:var(--dim); font-size:12px; }
+  .err { color:var(--bad); font-size:13px; margin:8px 0; }
+  .ok { color:var(--acc2); font-size:13px; margin:8px 0; }
+  #toast { position:fixed; top:64px; right:20px; z-index:99; display:flex; flex-direction:column; gap:8px; }
+  #toast div { background:#26314a; border:1px solid var(--line); padding:10px 16px; border-radius:9px;
+               font-size:13px; max-width:360px; }
+  #toast div.e { border-color:var(--bad); color:var(--bad); }
+  .login-wrap { max-width:460px; margin:8vh auto; }
+  .acct { display:inline-block; margin:3px; }
+  h4.sec { margin:18px 0 8px; color:var(--dim); font-weight:500; }
+</style>
+</head>
+<body>
+<div id="toast"></div>
+<header>
+  <h1>🌹 凌晨鲜花批发市场 · 竞价分货与损耗服务</h1>
+  <span class="who" id="who"></span>
+  <button class="ghost small" id="logoutBtn" style="display:none" onclick="logout()">退出登录</button>
+</header>
+
+<div id="loginView" class="login-wrap" style="display:none">
+  <div class="card">
+    <h3>登录市场工作台</h3>
+    <label>用户名</label>
+    <input id="loginUser" style="width:100%" placeholder="如 farmer01">
+    <label>密码</label>
+    <input id="loginPass" type="password" style="width:100%" placeholder="演示账号统一 flower123">
+    <div class="err" id="loginErr"></div>
+    <button style="width:100%;margin-top:10px" onclick="doLogin()">登 录</button>
+    <h4 class="sec">演示账号一键填充（密码均为 flower123）</h4>
+    <div id="acctList"></div>
+  </div>
+</div>
+
+<div id="appView" class="layout" style="display:none">
+  <nav id="menu"></nav>
+  <main id="view"></main>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const CAT = {rose:'玫瑰',lily:'百合',tulip:'郁金香',eustoma:'洋桔梗',eucalyptus:'尤加利',holiday_mix:'节日混搭'};
+const PURPOSE = {wedding:'婚礼',retail:'门店零售',livestream:'直播花束',enterprise:'企业订单'};
+const REASON = {petal_drop:'到店掉瓣',quality:'品质不符',temp_damage:'冷链失温',short_stem:'短枝过多',other:'其他'};
+const ROLE = {farmer:'花农',broker:'经纪人',qc:'质检',wholesaler:'批发商',shop:'花店采购',coldstore:'冷库',logistics:'配送',finance:'财务',manager:'市场管理'};
+const BSTATUS = {qc_pending:'待质检',qc_passed:'质检通过',qc_flagged:'质检打回',stored:'已入库',in_auction:'竞价中',sold:'已售出',expired:'已报损',closed:'已出清'};
+const ASTATUS = {active:'进行中',closed:'已成交',unsold:'流拍',cancelled:'已取消'};
+const OSTATUS = {pending_payment:'待付款',paid:'已付款',dispatched:'配送中',delivered:'已送达',completed:'已完成',cancelled:'已取消',timeout_cancelled:'超时取消'};
+const RSTATUS = {requested:'待审核',approved:'已赔付',rejected:'已驳回'};
+const RECV = {open:'未到期',overdue:'已逾期',settled:'已结清'};
+const TSTATUS = {pending:'待发车',in_transit:'在途',delivered:'已送达',arrived:'已到达'};
+const money = n => '¥' + Number(n||0).toFixed(2);
+const fmtT = s => s ? new Date(s).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
+const badge = (txt,cls='') => `<span class="badge ${cls}">${txt}</span>`;
+const stBadge = (map,v) => { const c = /报损|打回|驳回|取消|逾期|超时/.test(map[v]||v)?'r':(/待|在途|进行中|锁定/.test(map[v]||v)?'y':(/售|成交|送达|付款|通过|赔付|到达|结清/.test(map[v]||v)?'g':'')); return badge(map[v]||v,c); };
+const flagsTxt = f => (f||'').split(',').filter(Boolean).map(x=>({uneven_openness:'开放度不均',high_short_stem:'短枝比例高',temp_abnormal:'冷链失温'}[x]||x)).join('、');
+
+let S = { token: localStorage.getItem('fm_tok')||'', me: JSON.parse(localStorage.getItem('fm_me')||'null'), view:'' };
+
+function toast(msg, isErr){
+  const d = document.createElement('div');
+  if(isErr) d.className='e';
+  d.textContent = msg;
+  $('#toast').appendChild(d);
+  setTimeout(()=>d.remove(), isErr?6000:3000);
+}
+
+async function api(path, method='GET', body){
+  const opt = { method, headers: {} };
+  if(S.token) opt.headers['Authorization'] = 'Bearer '+S.token;
+  if(body !== undefined){ opt.headers['Content-Type']='application/json'; opt.body = JSON.stringify(body); }
+  const r = await fetch('/api'+path, opt);
+  let j = null;
+  try { j = await r.json(); } catch(e){}
+  if(!r.ok){
+    if(r.status===401){ logout(); }
+    throw new Error((j&&j.error)||('HTTP '+r.status));
+  }
+  return j;
+}
+const run = fn => async (...a) => { try { await fn(...a); } catch(e){ toast(e.message, true); } };
+
+const ACCOUNTS = [
+  ['farmer01','花农·昆明老张'],['farmer02','花农·凌源小李'],['broker01','经纪人·王姐'],
+  ['qc01','质检员·陈工'],['wholesaler01','批发商·恒信'],['wholesaler02','批发商·馨源'],
+  ['shop01','花店·城南花坊'],['shop02','婚庆·喜结良缘(账期)'],['shop03','花店·直播小艾'],
+  ['cold01','冷库·赵班长'],['ship01','配送·孙师傅'],['fin01','财务·刘会计'],['boss01','市场管理·吴经理'],
+];
+
+function renderLogin(){
+  $('#acctList').innerHTML = ACCOUNTS.map(a=>
+    `<button class="ghost small acct" onclick="$('#loginUser').value='${a[0]}';$('#loginPass').value='flower123'">${a[1]}</button>`).join('');
+}
+async function doLogin(){
+  $('#loginErr').textContent = '';
+  try{
+    const j = await api('/auth/login','POST',{username:$('#loginUser').value.trim(),password:$('#loginPass').value});
+    S.token = j.token; S.me = j.user;
+    localStorage.setItem('fm_tok', j.token);
+    localStorage.setItem('fm_me', JSON.stringify(j.user));
+    enter();
+  }catch(e){ $('#loginErr').textContent = e.message; }
+}
+function logout(){
+  if(S.token) api('/auth/logout','POST').catch(()=>{});
+  S.token=''; S.me=null;
+  localStorage.removeItem('fm_tok'); localStorage.removeItem('fm_me');
+  location.reload();
+}
+
+const MENUS = {
+  farmer:     [['batches','到货登记'],['dash','市场看板']],
+  broker:     [['batches','到货登记'],['dash','市场看板']],
+  qc:         [['qc','质检台'],['returns','退货审核'],['storage','冷库与保鲜'],['dash','市场看板']],
+  wholesaler: [['auctions','凌晨竞价大厅'],['inventory','我的库存'],['orders','销售订单'],['dash','市场看板']],
+  shop:       [['market','采购市场'],['orders','我的订单'],['dash','市场看板']],
+  coldstore:  [['storage','冷库与保鲜'],['dash','市场看板']],
+  logistics:  [['deliveries','配送调度'],['dash','市场看板']],
+  finance:    [['finance','财务结算'],['dash','市场看板']],
+  manager:    [['dash','市场看板'],['admin','拍卖管理'],['auctions','竞价大厅'],['returns','退货对账'],['finance','财务结算']],
+};
+
+function enter(){
+  $('#loginView').style.display='none';
+  $('#appView').style.display='flex';
+  $('#logoutBtn').style.display='';
+  $('#who').textContent = `${S.me.name}（${ROLE[S.me.role]||S.me.role}）`;
+  const menu = MENUS[S.me.role]||[['dash','市场看板']];
+  $('#menu').innerHTML = menu.map(m=>`<a data-v="${m[0]}" onclick="go('${m[0]}')">${m[1]}</a>`).join('');
+  go(menu[0][0]);
+}
+function go(v){
+  S.view = v;
+  document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on', a.dataset.v===v));
+  VIEWS[v]();
+}
+
+/* ---------------- 看板 ---------------- */
+async function vDash(){
+  const [ov, st, rank] = await Promise.all([
+    api('/analytics/overview'), api('/analytics/stability'), api('/farmers/ranking')]);
+  const c = ov.counts||{};
+  const occ = (ov.storage_slots||[]).reduce((a,s)=>a+s.occupied_bundles,0);
+  const cap = (ov.storage_slots||[]).reduce((a,s)=>a+s.capacity_bundles,0);
+  const overdue = (ov.credit_risk||[]).reduce((a,x)=>a+x.overdue_amount,0);
+  const retClaim = (ov.return_loss||[]).reduce((a,x)=>a+x.claim_amount,0);
+  $('#view').innerHTML = `
+  <div class="grid c4">
+    <div class="stat"><div class="n">${c.active_auctions||0}</div><div class="t">进行中的凌晨竞价</div></div>
+    <div class="stat"><div class="n">${occ}/${cap}</div><div class="t">冷库占用（扎）</div></div>
+    <div class="stat"><div class="n">${money(retClaim)}</div><div class="t">累计退货赔付</div></div>
+    <div class="stat"><div class="n" style="color:var(--bad)">${money(overdue)}</div><div class="t">账期逾期金额</div></div>
+    <div class="stat"><div class="n">${c.pending_orders||0}</div><div class="t">待付款订单</div></div>
+    <div class="stat"><div class="n">${c.timeout_orders||0}</div><div class="t">超时未付款取消</div></div>
+    <div class="stat"><div class="n">${c.requested_returns||0}</div><div class="t">待审核退货</div></div>
+    <div class="stat"><div class="n">${c.expired_batches||0}</div><div class="t">报损批次</div></div>
+  </div>
+  <div class="card"><h3>成交速度（按品类 / 产地）</h3>
+    <table><tr><th>品类</th><th>产地</th><th>成交笔数</th><th>平均成交耗时</th><th>成交金额</th></tr>
+    ${(ov.deal_speed||[]).map(x=>`<tr><td>${CAT[x.category]||x.category}</td><td>${esc(x.origin)}</td>
+      <td>${x.deals}</td><td>${x.avg_minutes} 分钟</td><td>${money(x.amount)}</td></tr>`).join('')||'<tr><td colspan=5 class=muted>暂无成交</td></tr>'}</table></div>
+  <div class="card"><h3>冷库占用</h3>
+    <div class="grid c4">${(ov.storage_slots||[]).map(s=>`
+      <div><div style="display:flex;justify-content:space-between;font-size:13px">
+        <b>${s.code}</b><span class="muted">${s.occupied_bundles}/${s.capacity_bundles} 扎</span></div>
+      <div class="bar"><i style="width:${Math.min(100,s.occupied_bundles/s.capacity_bundles*100)}%"></i></div></div>`).join('')}</div></div>
+  <div class="card"><h3>退货损耗（按品类 / 产地）</h3>
+    <table><tr><th>品类</th><th>产地</th><th>售出(扎)</th><th>退货(扎)</th><th>退货率</th><th>赔付金额</th></tr>
+    ${(ov.return_loss||[]).map(x=>`<tr><td>${CAT[x.category]||x.category}</td><td>${esc(x.origin)}</td>
+      <td>${x.sold_bundles}</td><td>${x.returned_bundles}</td><td>${x.return_rate_pct}%</td><td>${money(x.claim_amount)}</td></tr>`).join('')||'<tr><td colspan=6 class=muted>暂无</td></tr>'}</table></div>
+  <div class="card"><h3>账期风险</h3>
+    <table><tr><th>账期客户</th><th>额度</th><th>未到期</th><th>已逾期</th><th>最长逾期</th></tr>
+    ${(ov.credit_risk||[]).map(x=>`<tr><td>${esc(x.customer)}</td><td>${money(x.credit_limit)}</td>
+      <td>${money(x.open_amount)}</td><td>${x.overdue_amount>0?badge(money(x.overdue_amount),'r'):money(0)}</td>
+      <td>${x.max_overdue_days} 天</td></tr>`).join('')||'<tr><td colspan=5 class=muted>暂无账期客户</td></tr>'}</table></div>
+  <div class="card"><h3>产地 × 品类稳定性（辅助调整凌晨拍卖秩序）</h3>
+    <table><tr><th>产地</th><th>品类</th><th>批次数</th><th>质检均分</th><th>冷链达标率</th><th>退货率</th><th>稳定性评分</th></tr>
+    ${st.map(x=>`<tr><td>${esc(x.origin)}</td><td>${CAT[x.category]||x.category}</td><td>${x.batches}</td>
+      <td>${x.grade_avg}</td><td>${x.temp_ok_rate}%</td><td>${x.return_rate_pct}%</td>
+      <td>${badge(x.stability_score, x.stability_score>=75?'g':(x.stability_score>=55?'y':'r'))}</td></tr>`).join('')}</table></div>
+  <div class="card"><h3>花农信用排名（决定下次竞价排序）</h3>
+    <table><tr><th>名次</th><th>花农</th><th>信用分</th></tr>
+    ${rank.map(x=>`<tr><td>${x.rank}</td><td>${esc(x.name)}</td>
+      <td>${badge(x.credit_score, x.credit_score>=95?'g':(x.credit_score>=80?'y':'r'))}</td></tr>`).join('')}</table></div>`;
+}
+
+/* ---------------- 到货登记（花农/经纪人） ---------------- */
+async function vBatches(){
+  const [batches, farmers] = await Promise.all([
+    api('/batches'), S.me.role==='broker' ? api('/farmers') : Promise.resolve([])]);
+  const isBroker = S.me.role==='broker';
+  $('#view').innerHTML = `
+  <div class="card"><h3>凌晨到货登记</h3>
+    <div class="row">
+      ${isBroker?`<div><label>代录花农</label><select id="b_farmer">${farmers.map(f=>`<option value="${f.id}">${esc(f.name)}</option>`).join('')}</select></div>`:''}
+      <div><label>品类</label><select id="b_cat">${Object.entries(CAT).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div>
+      <div><label>产地</label><input id="b_origin" value="云南昆明"></div>
+      <div><label>采切时间</label><input id="b_cut" type="datetime-local"></div>
+      <div><label>枝长(cm)</label><input id="b_stem" type="number" value="60" style="width:80px"></div>
+      <div><label>开放度(1-5)</label><input id="b_open" type="number" step="0.5" min="1" max="5" value="3" style="width:70px"></div>
+      <div><label>扎数</label><input id="b_bundles" type="number" value="50" style="width:80px"></div>
+      <div><label>每扎枝数</label><input id="b_spb" type="number" value="20" style="width:70px"></div>
+      <div><label>冷链到货温度(℃)</label><input id="b_temp" type="number" step="0.1" value="5" style="width:90px"></div>
+      <div><label>可售时长(小时)</label><input id="b_sell" type="number" value="48" style="width:90px"></div>
+      <div><button onclick="createBatch()">提交登记</button></div>
+    </div>
+    <div class="muted" style="margin-top:6px">冷链温度 &gt; 8℃ 将自动打上「冷链失温」风险标。</div>
+  </div>
+  <div class="card"><h3>${isBroker?'我代录的批次':'我的批次'}</h3>
+    <table><tr><th>批次号</th><th>品类</th><th>产地</th><th>扎数</th><th>开放度</th><th>温度</th><th>质检</th><th>风险</th><th>状态</th><th>库位</th><th>登记时间</th></tr>
+    ${batches.map(b=>`<tr><td>${b.batch_no}</td><td>${CAT[b.category]||b.category}</td><td>${esc(b.origin)}</td>
+      <td>${b.bundles}</td><td>${b.openness}</td><td>${b.arrival_temp_c}℃</td><td>${b.grade||'—'}</td>
+      <td>${flagsTxt(b.risk_flags)?badge(flagsTxt(b.risk_flags),'y'):'—'}</td>
+      <td>${stBadge(BSTATUS,b.status)}</td><td>${b.slot_code||'—'}</td><td>${fmtT(b.created_at)}</td></tr>`).join('')||'<tr><td colspan=11 class=muted>暂无批次</td></tr>'}</table></div>`;
+  const d = new Date(Date.now()-6*3600e3);
+  $('#b_cut').value = new Date(d.getTime()-d.getTimezoneOffset()*6e4).toISOString().slice(0,16);
+}
+const createBatch = run(async ()=>{
+  const body = {
+    category: $('#b_cat').value, origin: $('#b_origin').value, cut_at: $('#b_cut').value,
+    stem_length_cm: +$('#b_stem').value, openness: +$('#b_open').value, bundles: +$('#b_bundles').value,
+    stems_per_bundle: +$('#b_spb').value, arrival_temp_c: +$('#b_temp').value, sellable_hours: +$('#b_sell').value,
+  };
+  if(S.me.role==='broker') body.farmer_id = +$('#b_farmer').value;
+  const j = await api('/batches','POST',body);
+  toast(`批次 ${j.batch_no} 登记成功，待质检`);
+  vBatches();
+});
+
+/* ---------------- 质检台 ---------------- */
+async function vQC(){
+  const list = await api('/qc/pending');
+  $('#view').innerHTML = `
+  <div class="card"><h3>待质检批次（${list.length}）</h3>
+  ${list.length===0?'<div class="muted">暂无待质检批次</div>':list.map(b=>`
+    <div class="card" style="background:#141b26">
+      <b>${b.batch_no}</b> ${CAT[b.category]||b.category} · ${esc(b.origin)} · ${b.bundles} 扎 ·
+      开放度 ${b.openness} · 到货 ${b.arrival_temp_c}℃ · 花农 ${esc(b.farmer_name)} · ${fmtT(b.created_at)}到货
+      <div class="row" style="margin-top:8px">
+        <div><label>等级</label><select id="q_grade_${b.id}"><option>A</option><option>B</option><option>C</option><option>D</option></select></div>
+        <div><label>开放度均匀度(0-1)</label><input id="q_even_${b.id}" type="number" step="0.05" min="0" max="1" value="0.9" style="width:90px"></div>
+        <div><label>短枝比例(0-1)</label><input id="q_short_${b.id}" type="number" step="0.01" min="0" max="1" value="0.05" style="width:90px"></div>
+        <div><label>冷链达标</label><select id="q_temp_${b.id}"><option value="true">达标</option><option value="false">失温</option></select></div>
+        <div><label>备注</label><input id="q_note_${b.id}" placeholder="质检备注"></div>
+        <div><button onclick="doQC(${b.id})">提交质检</button></div>
+      </div>
+      <div class="muted">均匀度 &lt;0.7 打「开放度不均」；短枝比例 &gt;0.2 打「短枝比例高」；D 级批次打回不得上拍。</div>
+    </div>`).join('')}</div>`;
+}
+const doQC = run(async id=>{
+  const j = await api(`/batches/${id}/qc`,'POST',{
+    grade: $(`#q_grade_${id}`).value, openness_evenness: +$(`#q_even_${id}`).value,
+    short_stem_ratio: +$(`#q_short_${id}`).value, temp_ok: $(`#q_temp_${id}`).value==='true',
+    notes: $(`#q_note_${id}`).value });
+  toast(`质检完成：${j.grade} 级 → ${BSTATUS[j.status]}${j.risk_flags?('，风险：'+flagsTxt(j.risk_flags)):''}`);
+  vQC();
+});
+
+/* ---------------- 冷库与保鲜 ---------------- */
+async function vStorage(){
+  const [slots, batches, pres] = await Promise.all([
+    api('/storage/slots'), api('/batches'), api('/preservatives')]);
+  const unstored = batches.filter(b=>['qc_passed','qc_flagged'].includes(b.status));
+  const stored = batches.filter(b=>['stored','in_auction'].includes(b.status));
+  $('#view').innerHTML = `
+  <div class="card"><h3>冷库库位</h3>
+    <div class="grid c4">${slots.map(s=>`
+      <div class="stat"><div style="display:flex;justify-content:space-between"><b>${s.code}</b>
+        <span class="muted">${s.batch_count} 批</span></div>
+        <div class="n">${s.occupied_bundles}<span class="muted" style="font-size:13px">/${s.capacity_bundles} 扎</span></div>
+        <div class="bar"><i style="width:${Math.min(100,s.occupied_bundles/s.capacity_bundles*100)}%"></i></div>
+        <div class="t">剩余 ${s.free_bundles} 扎</div></div>`).join('')}</div></div>
+  <div class="card"><h3>批次入库</h3>
+    ${unstored.length===0?'<div class="muted">暂无待入库批次</div>':
+    `<div class="row">
+      <div><label>待入库批次</label><select id="st_batch">${unstored.map(b=>
+        `<option value="${b.id}">${b.batch_no} ${CAT[b.category]||b.category} ${b.bundles}扎${b.grade?(' '+b.grade+'级'):''}</option>`).join('')}</select></div>
+      <div><label>库位</label><select id="st_slot">${slots.map(s=>
+        `<option value="${s.id}">${s.code}（余 ${s.free_bundles} 扎）</option>`).join('')}</select></div>
+      <div><button onclick="storeBatch()">入库</button></div>
+    </div><div class="muted">库位不足时会提示「冷库库位不足」，请换库位。</div>`}</div>
+  <div class="card"><h3>保鲜剂批次</h3>
+    <div class="row">
+      <div><label>批次号</label><input id="p_code" placeholder="PB-2603"></div>
+      <div><label>品牌</label><input id="p_brand" placeholder="可利鲜"></div>
+      <div><label>成分</label><input id="p_ing" placeholder="蔗糖+杀菌剂"></div>
+      <div><button class="ghost" onclick="createPres()">登记保鲜剂</button></div>
+    </div>
+    <table style="margin-top:10px"><tr><th>批次号</th><th>品牌</th><th>成分</th><th>有效期至</th></tr>
+    ${pres.map(p=>`<tr><td>${esc(p.code)}</td><td>${esc(p.brand)}</td><td>${esc(p.ingredient)}</td>
+      <td>${p.expires_at?fmtT(p.expires_at):'—'}</td></tr>`).join('')}</table></div>
+  <div class="card"><h3>施用保鲜剂（可售时长 +12h）</h3>
+    ${stored.length===0?'<div class="muted">暂无在库批次</div>':
+    `<div class="row">
+      <div><label>在库批次</label><select id="pa_batch">${stored.map(b=>
+        `<option value="${b.id}">${b.batch_no} ${CAT[b.category]||b.category}</option>`).join('')}</select></div>
+      <div><label>保鲜剂</label><select id="pa_pres">${pres.map(p=>
+        `<option value="${p.id}">${esc(p.code)} ${esc(p.brand)}</option>`).join('')}</select></div>
+      <div><label>用量(ml)</label><input id="pa_dose" type="number" value="500" style="width:90px"></div>
+      <div><button onclick="applyPres()">施用</button></div>
+    </div>`}</div>`;
+}
+const storeBatch = run(async ()=>{
+  const j = await api(`/batches/${$('#st_batch').value}/store`,'POST',{slot_id:+$('#st_slot').value});
+  toast(`已入库 ${j.slot_code}`); vStorage();
+});
+const createPres = run(async ()=>{
+  await api('/preservatives','POST',{code:$('#p_code').value,brand:$('#p_brand').value,ingredient:$('#p_ing').value});
+  toast('保鲜剂批次已登记'); vStorage();
+});
+const applyPres = run(async ()=>{
+  await api(`/batches/${$('#pa_batch').value}/preservative`,'POST',{preservative_id:+$('#pa_pres').value,dosage_ml:+$('#pa_dose').value});
+  toast('已施用，可售时长 +12h'); vStorage();
+});
+
+/* ---------------- 竞价大厅 ---------------- */
+async function vAuctions(){
+  const list = await api('/auctions');
+  const act = list.filter(a=>a.status==='active');
+  const done = list.filter(a=>a.status!=='active');
+  const isW = S.me.role==='wholesaler', isM = S.me.role==='manager';
+  $('#view').innerHTML = `
+  <div class="card"><h3>进行中（按花农信用排序，信用高者先拍）</h3>
+  ${act.length===0?'<div class="muted">暂无进行中的场次</div>':act.map(a=>`
+    <div class="card" style="background:#141b26">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <b>#${a.id} ${CAT[a.batch.category]||a.batch.category}</b>
+        ${badge(a.mode==='auction'?'竞价':'一口价','p')}
+        <span class="muted">${a.batch.batch_no} · ${esc(a.batch.origin)} · ${a.batch.grade||'未评级'}级 · ${a.batch.bundles} 扎</span>
+        ${a.batch.risk_flags?badge(flagsTxt(a.batch.risk_flags),'y'):''}
+        <span style="margin-left:auto">花农 ${esc(a.farmer_name)} ${badge('信用 '+a.farmer_credit, a.farmer_credit>=95?'g':'y')}</span>
+      </div>
+      <div style="display:flex;gap:16px;align-items:center;margin-top:10px;flex-wrap:wrap">
+        <span>起拍 ${money(a.start_price)}/扎</span>
+        ${a.mode==='auction'
+          ?`<span>当前最高 <b style="color:var(--acc)">${a.current_price?money(a.current_price):'暂无出价'}</b> · ${a.bid_count} 次出价</span>`
+          :`<span>一口价 <b style="color:var(--acc)">${money(a.buy_now_price)}</b>/扎</span>`}
+        <span class="muted">结拍 ${fmtT(a.ends_at)}</span>
+        ${isW && a.mode==='auction'?`<span><input id="bid_${a.id}" type="number" placeholder="出价/扎" style="width:100px">
+          <button class="small" onclick="doBid(${a.id})">出价</button></span>`:''}
+        ${isW && a.mode==='fixed'?`<button class="small green" onclick="doBuyNow(${a.id})">一口价成交</button>`:''}
+        ${isM?`<button class="small warn" onclick="doClose(${a.id})">提前结拍</button>`:''}
+      </div>
+    </div>`).join('')}</div>
+  <div class="card"><h3>近期已结束</h3>
+    <table><tr><th>#</th><th>品类</th><th>批次</th><th>模式</th><th>成交价</th><th>状态</th><th>结拍时间</th></tr>
+    ${done.map(a=>`<tr><td>${a.id}</td><td>${CAT[a.batch.category]||a.batch.category}</td><td>${a.batch.batch_no}</td>
+      <td>${a.mode==='auction'?'竞价':'一口价'}</td><td>${a.current_price?money(a.current_price)+'/扎':'—'}</td>
+      <td>${stBadge(ASTATUS,a.status)}</td><td>${fmtT(a.ends_at)}</td></tr>`).join('')||'<tr><td colspan=7 class=muted>暂无</td></tr>'}</table></div>`;
+}
+const doBid = run(async id=>{
+  const price = +$(`#bid_${id}`).value;
+  if(!price) return toast('请输入出价', true);
+  await api(`/auctions/${id}/bid`,'POST',{price});
+  toast('出价成功'); vAuctions();
+});
+const doBuyNow = run(async id=>{
+  const j = await api(`/auctions/${id}/buy-now`,'POST',{});
+  toast(`已按一口价 ${money(j.price)}/扎 成交`); vAuctions();
+});
+const doClose = run(async id=>{
+  await api(`/auctions/${id}/close`,'POST',{});
+  toast('已结拍'); vAuctions();
+});
+
+/* ---------------- 批发商库存 ---------------- */
+async function vInventory(){
+  const [invs, transfers] = await Promise.all([api('/inventories'), api('/transfers')]);
+  $('#view').innerHTML = `
+  <div class="card"><h3>我的库存</h3>
+    <table><tr><th>批次</th><th>品类/产地</th><th>可售</th><th>锁定</th><th>总量</th><th>成本价</th><th>挂牌价</th><th>状态</th><th>操作</th></tr>
+    ${invs.map(i=>`<tr>
+      <td>${i.batch.batch_no}</td><td>${CAT[i.batch.category]||i.batch.category} · ${esc(i.batch.origin)}</td>
+      <td>${i.bundles_available}</td><td>${i.bundles_reserved}</td><td>${i.bundles_total}</td>
+      <td>${money(i.cost_price)}</td><td>${i.list_price?money(i.list_price):'—'}</td>
+      <td>${i.listed?badge('已上架','g'):badge('未上架')} ${i.status!=='in_stock'?badge(i.status==='sold_out'?'售罄':'已调出','r'):''}</td>
+      <td>
+        <button class="small ghost" onclick="toggleList(${i.id},${!i.listed})">${i.listed?'下架':'上架'}</button>
+        <button class="small ghost" onclick="changePrice(${i.id})">改价</button>
+        <button class="small ghost" onclick="doTransfer(${i.id},${i.bundles_available})">跨城调货</button>
+      </td></tr>`).join('')||'<tr><td colspan=9 class=muted>暂无库存，去竞价大厅拍货</td></tr>'}</table>
+    <div class="muted" style="margin-top:6px">改价会留痕（调价记录），未付款订单仍按下单时锁定价结算。</div></div>
+  <div class="card"><h3>跨城调货</h3>
+    <table><tr><th>#</th><th>批次</th><th>品类</th><th>扎数</th><th>目的城市</th><th>状态</th><th>发起时间</th></tr>
+    ${transfers.map(t=>`<tr><td>${t.id}</td><td>${t.batch_no}</td><td>${CAT[t.category]||t.category}</td>
+      <td>${t.bundles}</td><td>${esc(t.to_city)}</td><td>${stBadge(TSTATUS,t.status)}</td><td>${fmtT(t.created_at)}</td></tr>`).join('')||'<tr><td colspan=7 class=muted>暂无调货</td></tr>'}</table></div>`;
+}
+const toggleList = run(async (id, listed)=>{
+  let body = {listed};
+  if(listed){
+    const p = prompt('挂牌价（元/扎）：');
+    if(!p) return;
+    body.list_price = +p;
+  }
+  await api(`/inventories/${id}/listing`,'POST',body);
+  toast(listed?'已上架':'已下架'); vInventory();
+});
+const changePrice = run(async id=>{
+  const p = prompt('新挂牌价（元/扎）：'); if(!p) return;
+  const reason = prompt('调价原因：','行情调整')||'';
+  await api(`/inventories/${id}/price`,'POST',{new_price:+p, reason});
+  toast('改价成功，已留痕'); vInventory();
+});
+const doTransfer = run(async (id, avail)=>{
+  const city = prompt('目的城市：','上海'); if(!city) return;
+  const n = prompt(`调货扎数（可调 ${avail}）：`,'5'); if(!n) return;
+  await api('/transfers','POST',{inventory_id:id, bundles:+n, to_city:city});
+  toast('调货单已创建，等待配送发车'); vInventory();
+});
+
+/* ---------------- 采购市场（花店） ---------------- */
+async function vMarket(){
+  const list = await api('/market');
+  const canCredit = S.me.credit_days>0;
+  $('#view').innerHTML = `
+  <div class="card"><h3>在售花材（下单即锁货，${canCredit?`账期客户：额度 ${money(S.me.credit_limit)} / ${S.me.credit_days} 天`:'立即支付'}）</h3>
+  ${list.length===0?'<div class="muted">暂无在售货品</div>':list.map(i=>`
+    <div class="card" style="background:#141b26">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <b>${CAT[i.batch.category]||i.batch.category}</b>
+        <span class="muted">${i.batch.batch_no} · ${esc(i.batch.origin)} · ${i.batch.grade||''}级</span>
+        ${i.batch.risk_flags?badge(flagsTxt(i.batch.risk_flags),'y'):''}
+        <span style="margin-left:auto" class="muted">${esc(i.wholesaler_name)}</span>
+      </div>
+      <div style="display:flex;gap:12px;align-items:end;margin-top:10px;flex-wrap:wrap">
+        <span style="font-size:18px;color:var(--acc)"><b>${money(i.list_price)}</b>/扎</span>
+        <span class="muted">可售 ${i.bundles_available} 扎</span>
+        <div><label>扎数</label><input id="m_n_${i.id}" type="number" value="5" style="width:70px"></div>
+        <div><label>用途</label><select id="m_p_${i.id}">${Object.entries(PURPOSE).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div>
+        <div><label>支付</label><select id="m_t_${i.id}"><option value="immediate">立即支付</option>${canCredit?'<option value="credit">账期挂账</option>':''}</select></div>
+        <div><label>节日预售</label><select id="m_pre_${i.id}"><option value="false">否</option><option value="true">是</option></select></div>
+        <div><label>节日</label><input id="m_f_${i.id}" placeholder="如 七夕" style="width:80px"></div>
+        <div><button class="small" onclick="createOrder(${i.id})">锁货下单</button></div>
+      </div>
+    </div>`).join('')}</div>`;
+}
+const createOrder = run(async id=>{
+  const j = await api('/orders','POST',{
+    inventory_id:id, bundles:+$(`#m_n_${id}`).value, purpose:$(`#m_p_${id}`).value,
+    payment_type:$(`#m_t_${id}`).value, is_presale:$(`#m_pre_${id}`).value==='true',
+    festival:$(`#m_f_${id}`).value });
+  toast(`订单 ${j.order_no} 已锁货，金额 ${money(j.total_amount)}，请在 ${fmtT(j.payment_deadline)} 前付款`);
+  go('orders');
+});
+
+/* ---------------- 订单 ---------------- */
+async function vOrders(){
+  const list = await api('/orders');
+  const isShop = S.me.role==='shop';
+  $('#view').innerHTML = `
+  <div class="card"><h3>${isShop?'我的订单':'销售订单'}</h3>
+    <table><tr><th>订单号</th><th>品类/批次</th><th>花店</th><th>扎数</th><th>单价</th><th>金额</th><th>用途</th><th>支付</th><th>状态</th><th>付款截止</th><th>操作</th></tr>
+    ${list.map(o=>`<tr>
+      <td>${o.order_no}${o.is_presale?badge('预售·'+esc(o.festival),'p'):''}${o.parent_order_id?badge('子单','y'):''}</td>
+      <td>${CAT[o.category]||o.category} ${o.batch_no}</td><td>${esc(o.shop_name)}</td>
+      <td>${o.bundles}</td><td>${money(o.price_per_bundle)}</td><td>${money(o.total_amount)}</td>
+      <td>${PURPOSE[o.purpose]||o.purpose}</td><td>${o.payment_type==='credit'?'账期':'即时'}</td>
+      <td>${stBadge(OSTATUS,o.status)}</td>
+      <td>${o.status==='pending_payment'?fmtT(o.payment_deadline):'—'}</td>
+      <td>${isShop?`
+        ${o.status==='pending_payment'?`<button class="small green" onclick="payOrder(${o.id})">支付</button>
+          <button class="small ghost" onclick="cancelOrder(${o.id})">取消</button>`:''}
+        ${['pending_payment','paid'].includes(o.status)?`<button class="small ghost" onclick="splitOrder(${o.id},${o.bundles})">拆分</button>`:''}
+        ${['delivered','dispatched'].includes(o.status)?`<button class="small warn" onclick="returnOrder(${o.id},${o.bundles})">退货</button>`:''}
+      `:''}</td></tr>`).join('')||'<tr><td colspan=11 class=muted>暂无订单</td></tr>'}</table>
+    <div class="muted" style="margin-top:6px">待付款订单超时自动取消并释放锁货；节日前可把订单拆成多张子单分拨配送。</div></div>`;
+}
+const payOrder = run(async id=>{ await api(`/orders/${id}/pay`,'POST',{}); toast('支付成功'); vOrders(); });
+const cancelOrder = run(async id=>{ await api(`/orders/${id}/cancel`,'POST',{}); toast('已取消'); vOrders(); });
+const splitOrder = run(async (id, bundles)=>{
+  const s = prompt(`原单 ${bundles} 扎，输入拆出的各子单扎数（逗号分隔，剩余留在原单）：`,'5,5');
+  if(!s) return;
+  const children = s.split(',').map(x=>({bundles:+x.trim(), note:'节前拆分'})).filter(c=>c.bundles>0);
+  if(!children.length) return;
+  const j = await api(`/orders/${id}/split`,'POST',{children});
+  toast(`已拆出 ${j.children.length} 张子单，原单余 ${j.remaining_bundles} 扎`); vOrders();
+});
+const returnOrder = run(async (id, bundles)=>{
+  const n = prompt(`退货扎数（订单 ${bundles} 扎）：`,'2'); if(!n) return;
+  const r = prompt('退货原因 petal_drop掉瓣/quality品质/temp_damage失温/short_stem短短枝/other其他：','petal_drop'); if(!r) return;
+  const ratio = prompt('损耗比例 0-1：','0.3'); if(!ratio) return;
+  const j = await api(`/orders/${id}/returns`,'POST',{bundles:+n, reason:r, loss_ratio:+ratio});
+  toast(`退货申请已提交，索赔 ${money(j.claim_amount)}，等待质检裁定`); vOrders();
+});
+
+/* ---------------- 配送调度 ---------------- */
+async function vDeliveries(){
+  const [orders, deliveries] = await Promise.all([api('/orders?status=paid'), api('/deliveries')]);
+  $('#view').innerHTML = `
+  <div class="card"><h3>待发货订单</h3>
+    ${orders.length===0?'<div class="muted">暂无待发货订单</div>':
+    `<table><tr><th>订单号</th><th>品类</th><th>花店</th><th>扎数</th><th>发货</th></tr>
+    ${orders.map(o=>`<tr><td>${o.order_no}</td><td>${CAT[o.category]||o.category}</td><td>${esc(o.shop_name)}</td>
+      <td>${o.bundles}</td>
+      <td><input id="d_city_${o.id}" placeholder="目的城市" value="本市" style="width:90px">
+        <button class="small" onclick="dispatch(${o.id})">发车</button></td></tr>`).join('')}</table>`}</div>
+  <div class="card"><h3>配送单</h3>
+    <table><tr><th>#</th><th>类型</th><th>单号</th><th>目的地</th><th>状态</th><th>发车</th><th>送达</th><th>操作</th></tr>
+    ${deliveries.map(d=>`<tr><td>${d.id}</td><td>${d.transfer_id?'跨城调货':'订单'}</td>
+      <td>${d.order_no||('调货#'+d.transfer_id)}</td><td>${esc(d.to_city)}</td>
+      <td>${stBadge(TSTATUS,d.status)}</td><td>${fmtT(d.departed_at)}</td><td>${fmtT(d.delivered_at)}</td>
+      <td>${d.status!=='delivered'?`<button class="small green" onclick="deliver(${d.id})">确认送达</button>`:''}</td>
+      </tr>`).join('')||'<tr><td colspan=8 class=muted>暂无配送单</td></tr>'}</table></div>`;
+}
+const dispatch = run(async oid=>{
+  await api('/deliveries','POST',{order_id:oid, to_city:$(`#d_city_${oid}`).value||'本市'});
+  toast('已发车'); vDeliveries();
+});
+const deliver = run(async id=>{
+  await api(`/deliveries/${id}/status`,'POST',{status:'delivered'});
+  toast('已送达'); vDeliveries();
+});
+
+/* ---------------- 退货审核 / 对账 ---------------- */
+async function vReturns(){
+  const list = await api('/returns');
+  const isQC = S.me.role==='qc';
+  let reconHTML = '';
+  if(S.me.role==='manager' || S.me.role==='finance'){
+    const month = new Date().toISOString().slice(0,7);
+    const recon = await api('/returns/reconciliation?month='+month);
+    reconHTML = `
+    <div class="card"><h3>退货对账（${month}）· 已赔付合计 ${money(recon.approved_claim_total)}</h3>
+      <table><tr><th>#</th><th>订单</th><th>批次</th><th>花店</th><th>批发商</th><th>原因</th><th>扎数</th><th>索赔</th><th>状态</th><th>花农责任</th></tr>
+      ${recon.items.map(x=>`<tr><td>${x.id}</td><td>${x.order_no}</td><td>${x.batch_no}</td>
+        <td>${esc(x.shop_name)}</td><td>${esc(x.wholesaler_name)}</td><td>${REASON[x.reason]||x.reason}</td>
+        <td>${x.bundles}</td><td>${money(x.claim_amount)}</td><td>${stBadge(RSTATUS,x.status)}</td>
+        <td>${x.farmer_responsible?badge('是','r'):'—'}</td></tr>`).join('')||'<tr><td colspan=10 class=muted>本月暂无退货</td></tr>'}</table></div>`;
+  }
+  $('#view').innerHTML = `
+  <div class="card"><h3>退货${isQC?'审核':'列表'}</h3>
+    <table><tr><th>#</th><th>订单</th><th>批次</th><th>花店</th><th>原因</th><th>扎数</th><th>损耗比</th><th>索赔</th><th>状态</th><th>裁定备注</th>${isQC?'<th>操作</th>':''}</tr>
+    ${list.map(x=>`<tr><td>${x.id}</td><td>${x.order_no}</td><td>${x.batch_no}</td><td>${esc(x.shop_name)}</td>
+      <td>${REASON[x.reason]||x.reason}</td><td>${x.bundles}</td><td>${Math.round(x.loss_ratio*100)}%</td>
+      <td>${money(x.claim_amount)}</td><td>${stBadge(RSTATUS,x.status)}</td><td>${esc(x.review_note)||'—'}</td>
+      ${isQC?`<td>${x.status==='requested'?`
+        <button class="small warn" onclick="review(${x.id},true)">赔付</button>
+        <button class="small ghost" onclick="review(${x.id},false)">驳回</button>`:''}</td>`:''}
+      </tr>`).join('')||'<tr><td colspan=11 class=muted>暂无退货</td></tr>'}</table>
+    ${isQC?'<div class="muted" style="margin-top:6px">裁定时勾选「花农责任」将扣减花农信用分，影响其下次竞价排序。</div>':''}</div>
+  ${reconHTML}`;
+}
+const review = run(async (id, approve)=>{
+  let responsible = false, note = '';
+  if(approve){
+    responsible = confirm('是否判定为花农责任（将扣花农信用分）？');
+    note = prompt('裁定备注：','到店损耗属实')||'';
+  } else {
+    note = prompt('驳回原因：','证据不足')||'';
+  }
+  const j = await api(`/returns/${id}/review`,'POST',{approve, farmer_responsible:responsible, note});
+  toast(`已${approve?'赔付':'驳回'}${j.credit_delta?`，花农信用 ${j.credit_delta}`:''}`); vReturns();
+});
+
+/* ---------------- 财务结算 ---------------- */
+async function vFinance(){
+  const [recv, settles, changes] = await Promise.all([
+    api('/receivables'), api('/settlements'), api('/price-changes')]);
+  const month = new Date().toISOString().slice(0,7);
+  $('#view').innerHTML = `
+  <div class="card"><h3>账期应收</h3>
+    <table><tr><th>#</th><th>客户</th><th>订单</th><th>金额</th><th>到期日</th><th>状态</th><th>逾期</th><th>操作</th></tr>
+    ${recv.map(x=>`<tr><td>${x.id}</td><td>${esc(x.customer)}</td><td>${x.order_no}</td>
+      <td>${money(x.amount)}</td><td>${fmtT(x.due_date)}</td><td>${stBadge(RECV,x.status)}</td>
+      <td>${x.days_overdue>0?badge(x.days_overdue+' 天','r'):'—'}</td>
+      <td>${x.status!=='settled'&&S.me.role==='finance'?`<button class="small green" onclick="settleRecv(${x.id})">核销回款</button>`:''}</td>
+      </tr>`).join('')||'<tr><td colspan=8 class=muted">暂无应收</td></tr>'}</table></div>
+  <div class="card"><h3>月度结算</h3>
+    <div class="row">
+      <div><label>结算月份</label><input id="s_month" type="month" value="${month}"></div>
+      <div><button onclick="genSettle()">生成/重算结算单</button></div>
+    </div>
+    <table style="margin-top:10px"><tr><th>月份</th><th>主体</th><th>角色</th><th>成交额</th><th>损耗扣款</th><th>冷库费</th><th>账期扣款</th><th>净额</th><th>明细</th></tr>
+    ${settles.map(s=>`<tr><td>${s.month}</td><td>${esc(s.entity_name)}</td>
+      <td>${({farmer:'花农',wholesaler:'批发商',shop:'花店'})[s.entity_role]||s.entity_role}</td>
+      <td>${money(s.gross_amount)}</td><td>${money(s.loss_deduction)}</td><td>${money(s.storage_fee)}</td>
+      <td>${money(s.credit_deduction)}</td><td><b>${money(s.net_amount)}</b></td>
+      <td><button class="small ghost" onclick="showSettle(${s.id})">明细</button></td></tr>`).join('')||'<tr><td colspan=9 class=muted>尚未生成，点击上方按钮</td></tr>'}</table>
+    <div id="settleDetail"></div></div>
+  <div class="card"><h3>调价记录（批发商改价留痕）</h3>
+    <table><tr><th>#</th><th>批次</th><th>品类</th><th>旧价</th><th>新价</th><th>原因</th><th>操作人</th><th>时间</th></tr>
+    ${changes.map(c=>`<tr><td>${c.id}</td><td>${c.batch_no}</td><td>${CAT[c.category]||c.category}</td>
+      <td>${c.old_price?money(c.old_price):'—'}</td><td>${money(c.new_price)}</td>
+      <td>${esc(c.reason)}</td><td>${esc(c.changed_by)}</td><td>${fmtT(c.created_at)}</td></tr>`).join('')||'<tr><td colspan=8 class=muted>暂无调价</td></tr>'}</table></div>`;
+}
+const settleRecv = run(async id=>{ await api(`/receivables/${id}/settle`,'POST',{}); toast('已核销'); vFinance(); });
+const genSettle = run(async ()=>{
+  const j = await api('/settlements/generate','POST',{month:$('#s_month').value});
+  toast(`已生成 ${j.settlements} 份结算单`); vFinance();
+});
+const showSettle = run(async id=>{
+  const s = await api('/settlements/'+id);
+  $('#settleDetail').innerHTML = `
+    <h4 class="sec">${s.month} · ${esc(s.entity_name)} 结算明细（净额 ${money(s.net_amount)}）</h4>
+    <table><tr><th>类型</th><th>说明</th><th>金额</th></tr>
+    ${s.lines.map(l=>`<tr><td>${l.kind}</td><td>${esc(l.description)}</td>
+      <td style="color:${l.amount<0?'var(--bad)':'var(--acc2)'}">${money(l.amount)}</td></tr>`).join('')}</table>`;
+});
+
+/* ---------------- 拍卖管理（管理方） ---------------- */
+async function vAdmin(){
+  const [batches, rank] = await Promise.all([api('/batches'), api('/farmers/ranking')]);
+  const ready = batches.filter(b=>['qc_passed','stored'].includes(b.status) && b.grade!=='D');
+  $('#view').innerHTML = `
+  <div class="card"><h3>发起凌晨专场（竞价 / 一口价）</h3>
+    ${ready.length===0?'<div class="muted">暂无可上拍批次（需质检通过）</div>':
+    `<div class="row">
+      <div><label>批次</label><select id="a_batch">${ready.map(b=>
+        `<option value="${b.id}">${b.batch_no} ${CAT[b.category]||b.category} ${b.grade}级 ${b.bundles}扎 ${esc(b.origin)}</option>`).join('')}</select></div>
+      <div><label>模式</label><select id="a_mode"><option value="auction">竞价</option><option value="fixed">一口价</option></select></div>
+      <div><label>起拍价/扎</label><input id="a_start" type="number" value="30" style="width:80px"></div>
+      <div><label>一口价/扎</label><input id="a_buy" type="number" placeholder="一口价模式必填" style="width:110px"></div>
+      <div><label>最小加价</label><input id="a_inc" type="number" value="1" style="width:70px"></div>
+      <div><label>时长(分钟)</label><input id="a_dur" type="number" value="30" style="width:80px"></div>
+      <div><button onclick="createAuction()">发起专场</button></div>
+    </div>`}</div>
+  <div class="card"><h3>花农信用排名（竞价排序依据）</h3>
+    <table><tr><th>名次</th><th>花农</th><th>信用分</th></tr>
+    ${rank.map(x=>`<tr><td>${x.rank}</td><td>${esc(x.name)}</td><td>${badge(x.credit_score,'g')}</td></tr>`).join('')}</table></div>`;
+}
+const createAuction = run(async ()=>{
+  const body = { batch_id:+$('#a_batch').value, mode:$('#a_mode').value,
+    start_price:+$('#a_start').value, min_increment:+$('#a_inc').value, duration_min:+$('#a_dur').value };
+  if($('#a_buy').value) body.buy_now_price = +$('#a_buy').value;
+  await api('/auctions','POST',body);
+  toast('专场已发起'); go('auctions');
+});
+
+const VIEWS = { dash:vDash, batches:vBatches, qc:vQC, storage:vStorage, auctions:vAuctions,
+  inventory:vInventory, market:vMarket, orders:vOrders, deliveries:vDeliveries,
+  returns:vReturns, finance:vFinance, admin:vAdmin };
+
+/* ---------------- 启动 ---------------- */
+(async function(){
+  renderLogin();
+  if(S.token && S.me){
+    try { await api('/auth/me'); enter(); return; }
+    catch(e){ /* token 失效 */ }
+  }
+  $('#loginView').style.display='block';
+})();
+</script>
+</body>
+</html>

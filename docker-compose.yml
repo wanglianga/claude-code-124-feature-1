@@ -1,0 +1,59 @@
+# 鲜花批发市场凌晨竞价分货与损耗服务
+# 应用与依赖服务全部在 compose 内部网络互访，仅 app 端口发布到宿主。
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-flower}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flower}
+      POSTGRES_DB: ${POSTGRES_DB:-flowermarket}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    networks:
+      - internal
+    # 不发布到宿主端口，仅内部网络访问
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    networks:
+      - internal
+    # 不发布到宿主端口，仅内部网络访问
+
+  app:
+    build: .
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-flower}:${POSTGRES_PASSWORD:-flower}@db:5432/${POSTGRES_DB:-flowermarket}?sslmode=disable
+      REDIS_ADDR: redis:6379
+      PAYMENT_TIMEOUT_MIN: ${PAYMENT_TIMEOUT_MIN:-30}
+      PRESALE_PAYMENT_HOURS: ${PRESALE_PAYMENT_HOURS:-72}
+      SWEEP_INTERVAL_SEC: ${SWEEP_INTERVAL_SEC:-15}
+      STORAGE_FEE_PER_BUNDLE_HOUR: ${STORAGE_FEE_PER_BUNDLE_HOUR:-0.2}
+      CREDIT_DAILY_PENALTY_RATE: ${CREDIT_DAILY_PENALTY_RATE:-0.005}
+      SEED_DEMO: ${SEED_DEMO:-true}
+    ports:
+      - "${CC_PUBLISH_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+
+networks:
+  internal:
+
+volumes:
+  pgdata:
