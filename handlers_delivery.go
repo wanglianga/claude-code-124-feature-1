@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -15,11 +16,17 @@ import (
 func (a *app) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	u := userOf(r)
 	var in struct {
-		OrderID int    `json:"order_id"`
-		ToCity  string `json:"to_city"`
+		OrderID       int    `json:"order_id"`
+		ToCity        string `json:"to_city"`
+		SortingPhotos string `json:"sorting_photos"` // 出库分拣照片（URL，多张逗号分隔）——短枝复核第 1 组证据
 	}
 	if err := decodeBody(r, &in); err != nil || in.OrderID == 0 || in.ToCity == "" {
 		fail(w, 400, "请给出 order_id 与目的城市 to_city")
+		return
+	}
+	sortingPhotos := strings.TrimSpace(in.SortingPhotos)
+	if sortingPhotos == "" {
+		fail(w, 400, "出库必须拍摄并上传分拣照片 sorting_photos（短枝复核证据）")
 		return
 	}
 	tx, err := a.db.BeginTx(r.Context(), nil)
@@ -30,9 +37,9 @@ func (a *app) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	var (
-		status          string
-		bundles, invID  int
-		batchID         int
+		status         string
+		bundles, invID int
+		batchID        int
 	)
 	err = tx.QueryRowContext(r.Context(),
 		`SELECT status, bundles, inventory_id, batch_id FROM orders WHERE id=$1 FOR UPDATE`, in.OrderID).
@@ -50,8 +57,9 @@ func (a *app) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	var deliveryID int
 	err = tx.QueryRowContext(r.Context(),
-		`INSERT INTO deliveries (order_id, dispatcher_id, to_city, status, departed_at)
-		 VALUES ($1,$2,$3,'in_transit',now()) RETURNING id`, in.OrderID, u.ID, in.ToCity).Scan(&deliveryID)
+		`INSERT INTO deliveries (order_id, dispatcher_id, to_city, status, departed_at, sorting_photos)
+		 VALUES ($1,$2,$3,'in_transit',now(),$4) RETURNING id`,
+		in.OrderID, u.ID, in.ToCity, sortingPhotos).Scan(&deliveryID)
 	if err != nil {
 		fail(w, 500, err.Error())
 		return
@@ -88,7 +96,7 @@ func (a *app) handleDispatch(w http.ResponseWriter, r *http.Request) {
 func (a *app) handleListDeliveries(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.db.QueryContext(r.Context(),
 		`SELECT d.id, d.order_id, d.transfer_id, d.to_city, d.status, d.departed_at, d.delivered_at, d.created_at,
-		        COALESCE(o.order_no,''), COALESCE(u.name,'')
+		        COALESCE(d.sorting_photos,''), COALESCE(o.order_no,''), COALESCE(u.name,'')
 		 FROM deliveries d
 		 LEFT JOIN orders o ON o.id=d.order_id
 		 LEFT JOIN users u ON u.id=d.dispatcher_id
@@ -101,19 +109,20 @@ func (a *app) handleListDeliveries(w http.ResponseWriter, r *http.Request) {
 	out := []map[string]any{}
 	for rows.Next() {
 		var (
-			id                  int
-			orderID, transferID *int
-			city, status        string
-			departed, delivered *time.Time
-			createdAt           time.Time
-			orderNo, dispatcher string
+			id                                 int
+			orderID, transferID                *int
+			city, status                       string
+			departed, delivered                *time.Time
+			createdAt                          time.Time
+			orderNo, dispatcher, sortingPhotos string
 		)
 		if rows.Scan(&id, &orderID, &transferID, &city, &status, &departed, &delivered, &createdAt,
-			&orderNo, &dispatcher) == nil {
+			&sortingPhotos, &orderNo, &dispatcher) == nil {
 			out = append(out, map[string]any{
 				"id": id, "order_id": orderID, "transfer_id": transferID, "to_city": city,
 				"status": status, "departed_at": departed, "delivered_at": delivered,
-				"created_at": createdAt, "order_no": orderNo, "dispatcher": dispatcher,
+				"created_at": createdAt, "sorting_photos": photosSplit(sortingPhotos),
+				"order_no": orderNo, "dispatcher": dispatcher,
 			})
 		}
 	}
@@ -314,13 +323,13 @@ func (a *app) handleListReturns(w http.ResponseWriter, r *http.Request) {
 	out := []map[string]any{}
 	for rows.Next() {
 		var (
-			rid, orderID, bundles   int
-			reason, status, note    string
-			ratio, claim            float64
-			responsible             bool
-			createdAt               time.Time
-			reviewedAt              *time.Time
-			batchNo, cat, shop, no  string
+			rid, orderID, bundles  int
+			reason, status, note   string
+			ratio, claim           float64
+			responsible            bool
+			createdAt              time.Time
+			reviewedAt             *time.Time
+			batchNo, cat, shop, no string
 		)
 		if rows.Scan(&rid, &orderID, &bundles, &reason, &ratio, &claim, &status, &responsible,
 			&note, &createdAt, &reviewedAt, &batchNo, &cat, &shop, &no) == nil {
@@ -360,9 +369,9 @@ func (a *app) handleReviewReturn(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	var (
-		status            string
-		batchID           int
-		ratio             float64
+		status  string
+		batchID int
+		ratio   float64
 	)
 	err = tx.QueryRowContext(r.Context(),
 		`SELECT status, batch_id, loss_ratio FROM returns WHERE id=$1 FOR UPDATE`, id).
@@ -465,14 +474,14 @@ func (a *app) handleReturnReconciliation(w http.ResponseWriter, r *http.Request)
 	total := 0.0
 	for rows.Next() {
 		var (
-			id, bundles            int
-			reason, status         string
-			ratio, claim           float64
-			responsible            bool
-			createdAt              time.Time
-			reviewedAt             *time.Time
-			batchNo, cat, origin   string
-			shop, whole, orderNo   string
+			id, bundles          int
+			reason, status       string
+			ratio, claim         float64
+			responsible          bool
+			createdAt            time.Time
+			reviewedAt           *time.Time
+			batchNo, cat, origin string
+			shop, whole, orderNo string
 		)
 		if rows.Scan(&id, &bundles, &reason, &ratio, &claim, &status, &responsible,
 			&createdAt, &reviewedAt, &batchNo, &cat, &origin, &shop, &whole, &orderNo) == nil {

@@ -178,6 +178,15 @@ func (a *app) routes() {
 	a.mux.HandleFunc("POST /api/returns/{id}/review", a.require("qc")(a.handleReviewReturn))
 	a.mux.HandleFunc("GET /api/returns/reconciliation", a.require("finance", "wholesaler", "manager")(a.handleReturnReconciliation))
 
+	// 短枝损耗复核（四组证据 / 差价补偿 / 退货 / 下一批折扣 / 账扣确认 / 争议冻结）
+	a.mux.HandleFunc("POST /api/orders/{id}/short-stem-reviews", a.require("shop")(a.handleCreateShortStemReview))
+	a.mux.HandleFunc("GET /api/short-stem-reviews", a.auth(a.handleListShortStemReviews))
+	a.mux.HandleFunc("GET /api/short-stem-reviews/{id}", a.auth(a.handleGetShortStemReview))
+	a.mux.HandleFunc("POST /api/short-stem-reviews/{id}/confirm", a.require("qc")(a.handleConfirmShortStemReview))
+	a.mux.HandleFunc("POST /api/short-stem-reviews/{id}/ack-charge", a.require("farmer")(a.handleAckShortStemCharge))
+	a.mux.HandleFunc("POST /api/short-stem-reviews/{id}/dispute", a.require("farmer")(a.handleDisputeShortStem))
+	a.mux.HandleFunc("POST /api/short-stem-reviews/{id}/close-dispute", a.require("finance", "qc", "manager")(a.handleCloseShortStemDispute))
+
 	// 财务：账期 / 结算
 	a.mux.HandleFunc("GET /api/receivables", a.require("finance", "manager")(a.handleListReceivables))
 	a.mux.HandleFunc("POST /api/receivables/{id}/settle", a.require("finance")(a.handleSettleReceivable))

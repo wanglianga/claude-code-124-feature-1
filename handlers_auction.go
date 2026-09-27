@@ -115,12 +115,12 @@ func (a *app) handleListAuctions(w http.ResponseWriter, r *http.Request) {
 	out := []map[string]any{}
 	for rows.Next() {
 		var (
-			aid, bidCount, batchID, bundles, credit              int
+			aid, bidCount, batchID, bundles, credit                  int
 			mode, status, batchNo, cat, origin, grade, flags, farmer string
-			startPrice, minInc, open                             float64
-			buyNow, cur                                          *float64
-			winner                                               *int
-			startsAt, endsAt                                     time.Time
+			startPrice, minInc, open                                 float64
+			buyNow, cur                                              *float64
+			winner                                                   *int
+			startsAt, endsAt                                         time.Time
 		)
 		if err := rows.Scan(&aid, &mode, &startPrice, &buyNow, &minInc, &cur, &status, &startsAt, &endsAt,
 			&winner, &batchID, &batchNo, &cat, &origin, &grade, &bundles, &open, &flags, &farmer, &credit, &bidCount); err != nil {
@@ -380,6 +380,26 @@ func (a *app) closeAuctionTx(tx *sql.Tx, auctionID int) error {
 	if _, err := tx.Exec(`UPDATE flower_batches SET status='sold' WHERE id=$1`, batchID); err != nil {
 		return err
 	}
+	// 核销该花农最早一笔「下一批折扣」承诺：按本场成交价 × 扎数 × 折扣率让利，冲减花农结算收入
+	var farmerID, batchBundles int
+	if err := tx.QueryRow(`SELECT farmer_id, bundles FROM flower_batches WHERE id=$1`, batchID).
+		Scan(&farmerID, &batchBundles); err == nil {
+		var cid int
+		var rate float64
+		err := tx.QueryRow(
+			`SELECT c.id, c.rate FROM farmer_discount_commitments c
+			 WHERE c.farmer_id=$1 AND c.status='pending'
+			   AND NOT EXISTS (SELECT 1 FROM short_stem_reviews s
+			                   WHERE s.id=c.review_id AND s.status='disputed')
+			 ORDER BY c.id LIMIT 1 FOR UPDATE OF c`,
+			farmerID).Scan(&cid, &rate)
+		if err == nil {
+			discount := round2(top * float64(batchBundles) * rate)
+			tx.Exec(`UPDATE farmer_discount_commitments
+			 SET status='redeemed', redeemed_auction_id=$1, redeemed_amount=$2, redeemed_at=now()
+			 WHERE id=$3`, auctionID, discount, cid)
+		}
+	}
 	_, err = tx.Exec(
 		`INSERT INTO inventories (wholesaler_id, batch_id, auction_id, bundles_total, bundles_available, cost_price)
 		 SELECT $1, b.id, $2, b.bundles, b.bundles, $3 FROM flower_batches b WHERE b.id=$4`,
@@ -612,10 +632,10 @@ func (a *app) handleListPriceChanges(w http.ResponseWriter, r *http.Request) {
 	out := []map[string]any{}
 	for rows.Next() {
 		var (
-			id, wid             int
-			oldP, newP          *float64
+			id, wid                  int
+			oldP, newP               *float64
 			reason, batchNo, cat, by string
-			at                  time.Time
+			at                       time.Time
 		)
 		if err := rows.Scan(&id, &oldP, &newP, &reason, &at, &batchNo, &cat, &by, &wid); err != nil {
 			continue

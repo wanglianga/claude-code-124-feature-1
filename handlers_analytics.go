@@ -135,6 +135,39 @@ func (a *app) handleAnalyticsOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	out["counts"] = counts
 
+	// 短枝损耗复核：各状态单数、已账扣金额、争议冻结金额（争议关闭前冻结）
+	ssr := map[string]any{}
+	rows2, err := a.db.QueryContext(ctx,
+		`SELECT status, count(*),
+		        COALESCE(SUM(price_diff_amount+return_amount),0),
+		        COALESCE(SUM(frozen_amount),0)
+		 FROM short_stem_reviews GROUP BY status`)
+	if err == nil {
+		statusCount := map[string]int64{}
+		var chargedAmt, frozenAmt float64
+		for rows2.Next() {
+			var st string
+			var n int64
+			var amt, frozen float64
+			if rows2.Scan(&st, &n, &amt, &frozen) == nil {
+				statusCount[st] = n
+				if st == "charged" {
+					chargedAmt = amt
+				}
+				if st == "disputed" {
+					frozenAmt = frozen
+				}
+			}
+		}
+		rows2.Close()
+		ssr["status_count"] = statusCount
+		ssr["charged_amount"] = round2(chargedAmt)
+		ssr["frozen_amount"] = round2(frozenAmt)
+		ssr["pending_qc"] = statusCount["pending_qc"]
+		ssr["disputed"] = statusCount["disputed"]
+	}
+	out["short_stem_reviews"] = ssr
+
 	if data, err := json.Marshal(out); err == nil {
 		a.rdb.Set(ctx, "cache:overview", data, 10*time.Second)
 	}
@@ -167,7 +200,7 @@ func (a *app) handleAnalyticsStability(w http.ResponseWriter, r *http.Request) {
 		if rows.Scan(&origin, &cat, &batches, &gradeAvg, &tempOK, &clean) == nil {
 			stats[key{origin, cat}] = &map[string]any{
 				"origin": origin, "category": cat, "batches": batches,
-				"grade_avg": round2(gradeAvg), "temp_ok_rate": round2(tempOK*100), "clean_rate": round2(clean*100),
+				"grade_avg": round2(gradeAvg), "temp_ok_rate": round2(tempOK * 100), "clean_rate": round2(clean * 100),
 				"sold_bundles": 0, "returned_bundles": 0, "return_rate_pct": 0.0,
 			}
 		}

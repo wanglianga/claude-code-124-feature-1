@@ -265,6 +265,70 @@ CREATE TABLE IF NOT EXISTS farmer_credit_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- 配送出库时的分拣照片（短枝复核的第 1 组证据之一）
+ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS sorting_photos TEXT NOT NULL DEFAULT '';
+
+-- 短枝损耗复核单：花店反馈短枝比例高于竞价说明 → 服务汇聚四组证据 → 质检确认 → 账扣/争议
+CREATE TABLE IF NOT EXISTS short_stem_reviews (
+  id SERIAL PRIMARY KEY,
+  review_no TEXT UNIQUE,
+  order_id INT NOT NULL REFERENCES orders(id),
+  batch_id INT NOT NULL REFERENCES flower_batches(id),
+  shop_id INT NOT NULL REFERENCES users(id),
+  wholesaler_id INT NOT NULL REFERENCES users(id),
+  farmer_id INT NOT NULL REFERENCES users(id),
+  bundles INT NOT NULL,                       -- 涉及扎数
+  auction_declared_short_ratio NUMERIC(4,3) NOT NULL,  -- 竞价说明短枝比例（取自分拣质检）
+  qc_grade_snapshot TEXT NOT NULL DEFAULT '',          -- 证据②质检等级
+  outbound_bundles INT NOT NULL DEFAULT 0,             -- 证据③出库扎数
+  sorting_photos TEXT NOT NULL DEFAULT '',             -- 证据①分拣照片（出库拍摄，URL 逗号分隔）
+  outbound_photo TEXT NOT NULL DEFAULT '',             -- 证据③出库照片
+  actual_short_ratio NUMERIC(4,3) NOT NULL,            -- 证据④到店复拍实测短枝比例
+  reshoot_photos TEXT NOT NULL DEFAULT '',             -- 证据④到店复拍照片（URL 逗号分隔）
+  shop_remark TEXT NOT NULL DEFAULT '',
+  -- pending_qc 待质检 / confirmed 已质检确认 / charged 花农已确认账扣 /
+  -- disputed 花农异议冻结中 / closed_upheld 争议关闭维持原判 / closed_overturned 争议关闭推翻
+  status TEXT NOT NULL DEFAULT 'pending_qc',
+  resolution TEXT NOT NULL DEFAULT '',        -- price_diff 差价补偿 / return 退货 / next_discount 下一批折扣
+  qc_note TEXT NOT NULL DEFAULT '',
+  confirmed_qc_by INT REFERENCES users(id),
+  confirmed_qc_at TIMESTAMPTZ,
+  -- 三种处理结果的金额/数量（质检确认时落定）
+  price_diff_per_bundle NUMERIC(10,2) NOT NULL DEFAULT 0,
+  price_diff_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+  return_bundles INT NOT NULL DEFAULT 0,
+  return_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+  next_discount_rate NUMERIC(5,4) NOT NULL DEFAULT 0,
+  commitment_id INT,                           -- 生成的下一批折扣承诺
+  frozen_amount NUMERIC(14,2) NOT NULL DEFAULT 0,  -- 争议期间财务冻结的差价
+  -- 花农账扣确认
+  farmer_responsibility TEXT NOT NULL DEFAULT 'pending',  -- pending/yes/no（账扣确认/异议）
+  farmer_charged BOOLEAN NOT NULL DEFAULT false,
+  confirmed_by INT REFERENCES users(id),
+  confirmed_at TIMESTAMPTZ,
+  farmer_seen_at TIMESTAMPTZ,
+  -- 争议
+  dispute_raised_at TIMESTAMPTZ,
+  dispute_reason TEXT NOT NULL DEFAULT '',
+  closed_by INT REFERENCES users(id),
+  closed_at TIMESTAMPTZ,
+  close_note TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 花农下一批折扣承诺（质检确认生成，结拍时自动核销冲减花农成交收入）
+CREATE TABLE IF NOT EXISTS farmer_discount_commitments (
+  id SERIAL PRIMARY KEY,
+  farmer_id INT NOT NULL REFERENCES users(id),
+  review_id INT NOT NULL REFERENCES short_stem_reviews(id),
+  rate NUMERIC(5,4) NOT NULL,                 -- 折扣率，如 0.10 = 下批成交价让利 10%
+  status TEXT NOT NULL DEFAULT 'pending',     -- pending 待核销 / redeemed 已核销 / voided 争议推翻作废
+  redeemed_auction_id INT REFERENCES auctions(id),
+  redeemed_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  redeemed_at TIMESTAMPTZ
+);
+
 CREATE TABLE IF NOT EXISTS settlements (
   id SERIAL PRIMARY KEY,
   month TEXT NOT NULL,          -- YYYY-MM
@@ -301,4 +365,8 @@ CREATE INDEX IF NOT EXISTS idx_orders_batch ON orders(batch_id);
 CREATE INDEX IF NOT EXISTS idx_orders_status_deadline ON orders(status, payment_deadline);
 CREATE INDEX IF NOT EXISTS idx_returns_order ON returns(order_id);
 CREATE INDEX IF NOT EXISTS idx_receivables_customer ON credit_receivables(customer_id, status);
+CREATE INDEX IF NOT EXISTS idx_ssr_farmer ON short_stem_reviews(farmer_id, status);
+CREATE INDEX IF NOT EXISTS idx_ssr_order ON short_stem_reviews(order_id);
+CREATE INDEX IF NOT EXISTS idx_ssr_status ON short_stem_reviews(status);
+CREATE INDEX IF NOT EXISTS idx_commitment_farmer ON farmer_discount_commitments(farmer_id, status);
 `

@@ -26,11 +26,11 @@ func (a *app) handleListReceivables(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	for rows.Next() {
 		var (
-			id, orderID     int
-			amount          float64
-			due, createdAt  time.Time
+			id, orderID           int
+			amount                float64
+			due, createdAt        time.Time
 			status, name, orderNo string
-			settledAt       *time.Time
+			settledAt             *time.Time
 		)
 		if rows.Scan(&id, &amount, &due, &status, &settledAt, &createdAt, &name, &orderNo, &orderID) == nil {
 			daysOverdue := 0
@@ -218,6 +218,57 @@ func (a *app) handleGenerateSettlement(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		rows.Close()
+		// 短枝损耗复核：花农已确认账扣的差价补偿/退货扣款（争议关闭前冻结，不计入）
+		rows, err = tx.QueryContext(r.Context(),
+			`SELECT id, COALESCE(review_no,''), resolution, price_diff_amount, return_amount
+			 FROM short_stem_reviews
+			 WHERE farmer_id=$1 AND status='charged' AND confirmed_at>=$2 AND confirmed_at<$3`,
+			fid, start, end)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		for rows.Next() {
+			var ssrid int
+			var no, res string
+			var priceAmt, retAmt float64
+			if rows.Scan(&ssrid, &no, &res, &priceAmt, &retAmt) == nil {
+				if priceAmt > 0 {
+					loss += priceAmt
+					lines = append(lines, settleLine{"short_stem_price_diff", "short_stem_review",
+						fmt.Sprintf("复核 %s 短枝差价补偿账扣", no), ssrid, -priceAmt})
+				}
+				if retAmt > 0 {
+					loss += retAmt
+					lines = append(lines, settleLine{"short_stem_return", "short_stem_review",
+						fmt.Sprintf("复核 %s 短枝退货账扣（%s）", no, res), ssrid, -retAmt})
+				}
+			}
+		}
+		rows.Close()
+		// 短枝损耗复核：下一批折扣已在结拍时核销的让利
+		rows, err = tx.QueryContext(r.Context(),
+			`SELECT c.id, c.redeemed_amount, b.batch_no
+			 FROM farmer_discount_commitments c
+			 JOIN auctions a ON a.id=c.redeemed_auction_id
+			 JOIN flower_batches b ON b.id=a.batch_id
+			 WHERE c.farmer_id=$1 AND c.status='redeemed' AND c.redeemed_at>=$2 AND c.redeemed_at<$3`,
+			fid, start, end)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		for rows.Next() {
+			var cid int
+			var amt float64
+			var no string
+			if rows.Scan(&cid, &amt, &no) == nil {
+				loss += amt
+				lines = append(lines, settleLine{"next_batch_discount", "discount_commitment",
+					fmt.Sprintf("批次 %s 短枝复核下一批折扣让利", no), cid, -amt})
+			}
+		}
+		rows.Close()
 		rows, err = tx.QueryContext(r.Context(),
 			`SELECT b.id, b.batch_no, b.bundles, b.stored_at, b.out_at FROM flower_batches b
 			 WHERE b.farmer_id=$1 AND b.stored_at IS NOT NULL AND b.stored_at<$2
@@ -394,6 +445,34 @@ func (a *app) handleGenerateSettlement(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		rows.Close()
+		// 短枝损耗复核：花农已确认账扣的差价补偿/退货款返还花店（争议冻结中不计）
+		rows, err = tx.QueryContext(r.Context(),
+			`SELECT id, COALESCE(review_no,''), price_diff_amount, return_amount
+			 FROM short_stem_reviews
+			 WHERE shop_id=$1 AND status='charged' AND confirmed_at>=$2 AND confirmed_at<$3`,
+			sid, start, end)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		for rows.Next() {
+			var ssrid int
+			var no string
+			var priceAmt, retAmt float64
+			if rows.Scan(&ssrid, &no, &priceAmt, &retAmt) == nil {
+				if priceAmt > 0 {
+					loss += priceAmt
+					lines = append(lines, settleLine{"short_stem_price_diff", "short_stem_review",
+						fmt.Sprintf("复核 %s 短枝差价补偿返还", no), ssrid, -priceAmt})
+				}
+				if retAmt > 0 {
+					loss += retAmt
+					lines = append(lines, settleLine{"short_stem_return", "short_stem_review",
+						fmt.Sprintf("复核 %s 短枝退货款返还", no), ssrid, -retAmt})
+				}
+			}
+		}
+		rows.Close()
 		rows, err = tx.QueryContext(r.Context(),
 			`SELECT c.id, c.amount, c.due_date, c.settled_at, c.status FROM credit_receivables c
 			 WHERE c.customer_id=$1 AND c.due_date>=$2 AND c.due_date<$3
@@ -491,10 +570,10 @@ func (a *app) handleListSettlements(w http.ResponseWriter, r *http.Request) {
 	out := []map[string]any{}
 	for rows.Next() {
 		var (
-			id, entityID                int
-			month, role, name           string
+			id, entityID                      int
+			month, role, name                 string
 			gross, loss, storage, credit, net float64
-			at                          time.Time
+			at                                time.Time
 		)
 		if rows.Scan(&id, &month, &role, &entityID, &gross, &loss, &storage, &credit, &net, &at, &name) == nil {
 			out = append(out, map[string]any{
@@ -515,10 +594,10 @@ func (a *app) handleGetSettlement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var (
-		month, role, name           string
-		entityID                    int
+		month, role, name                 string
+		entityID                          int
 		gross, loss, storage, credit, net float64
-		at                          time.Time
+		at                                time.Time
 	)
 	err := a.db.QueryRowContext(r.Context(),
 		`SELECT s.month, s.entity_role, s.entity_id, s.gross_amount, s.loss_deduction, s.storage_fee,

@@ -239,10 +239,95 @@ func (a *app) seedDemo() {
 	tx.Exec(`UPDATE flower_batches SET sellable_hours=sellable_hours+12 WHERE id=$1`, b1)
 	_ = pres2
 
+	// 批次7：玫瑰·昆明 —— 短枝损耗复核演示链（40 扎分 4 单到店，各覆盖一种复核状态）
+	t7 := now.Add(-26 * h)
+	b7 := addBatch("farmer01", "rose", "云南玉溪", now.Add(-30*h), 68, 3.0, 40, 20, 4.2, 48, "A", "", "sold", "A-04", &t7)
+	addQC(b7, "A", 0.9, 0.08, true, "分拣质检：短枝比例 8%（竞价说明口径）", now.Add(-25*h))
+	var auc7 int
+	tx.QueryRow(`INSERT INTO auctions (batch_id, mode, start_price, buy_now_price, min_increment, current_price, winner_id, status, starts_at, ends_at, created_by)
+		VALUES ($1,'fixed',38,38,1,38,$2,'closed',$3,$4,$5) RETURNING id`,
+		b7, uid["wholesaler01"], now.Add(-25*h), now.Add(-24*h), uid["boss01"]).Scan(&auc7)
+	tx.Exec(`INSERT INTO bids (auction_id, wholesaler_id, price, created_at) VALUES ($1,$2,38,$3)`,
+		auc7, uid["wholesaler01"], now.Add(-24*h))
+	var inv7 int
+	tx.QueryRow(`INSERT INTO inventories (wholesaler_id, batch_id, auction_id, bundles_total, bundles_available,
+		bundles_reserved, cost_price, list_price, listed, status, created_at)
+		VALUES ($1,$2,$3,40,0,0,38,48,true,'sold_out',$4) RETURNING id`,
+		uid["wholesaler01"], b7, auc7, now.Add(-24*h)).Scan(&inv7)
+	tx.Exec(`UPDATE flower_batches SET out_at=$1 WHERE id=$2`, now.Add(-20*h), b7)
+
+	addRoseOrder := func(shop string, createdAt, paidAt, deliveredAt time.Time, photos string) int {
+		var oid int
+		tx.QueryRow(
+			`INSERT INTO orders (shop_id, inventory_id, wholesaler_id, batch_id, bundles, price_per_bundle,
+			  total_amount, purpose, payment_type, status, payment_deadline, paid_at, delivered_at, created_at)
+			 VALUES ($1,$2,$3,$4,10,48,480,'retail','immediate','delivered',$5,$6,$7,$8) RETURNING id`,
+			uid[shop], inv7, uid["wholesaler01"], b7, paidAt.Add(30*m), paidAt, deliveredAt, createdAt).Scan(&oid)
+		tx.Exec(`UPDATE orders SET order_no=$1 WHERE id=$2`, fmt.Sprintf("O%08d", oid), oid)
+		tx.Exec(`INSERT INTO payments (order_id, amount, method, recorded_by, paid_at) VALUES ($1,480,'online',$2,$3)`,
+			oid, uid[shop], paidAt)
+		tx.Exec(`INSERT INTO deliveries (order_id, dispatcher_id, to_city, status, departed_at, delivered_at, sorting_photos, created_at)
+			VALUES ($1,$2,'本市','delivered',$3,$4,$5,$3)`, oid, uid["ship01"], paidAt.Add(10*m), deliveredAt, photos, paidAt.Add(10*m))
+		return oid
+	}
+	sorting := fmt.Sprintf("https://photos.example.com/sorting/b%d-1.jpg,https://photos.example.com/sorting/b%d-2.jpg", b7, b7)
+	outbound := fmt.Sprintf("https://photos.example.com/sorting/b%d-1.jpg", b7)
+	dlv7 := now.Add(-20 * h)
+	o4 := addRoseOrder("shop01", now.Add(-23*h), now.Add(-22*h), dlv7, sorting)
+	o5 := addRoseOrder("shop03", now.Add(-22*h), now.Add(-21*h), dlv7.Add(20*m), sorting)
+	o6 := addRoseOrder("shop01", now.Add(-21*h), now.Add(-20*h), dlv7.Add(40*m), sorting)
+	o7 := addRoseOrder("shop03", now.Add(-6*h), now.Add(-5*h), now.Add(-3*h), sorting)
+
+	// addSSR 插入一张待质检复核单（四组证据随单汇聚），状态类字段由后续 UPDATE 落定
+	addSSR := func(orderID int, actual float64, reshoot string, createdAt time.Time) int {
+		var id int
+		tx.QueryRow(
+			`INSERT INTO short_stem_reviews
+			   (order_id, batch_id, shop_id, wholesaler_id, farmer_id, bundles,
+			    auction_declared_short_ratio, qc_grade_snapshot, outbound_bundles,
+			    sorting_photos, outbound_photo, actual_short_ratio, reshoot_photos, shop_remark, created_at)
+			 VALUES ($1,$2,(SELECT shop_id FROM orders WHERE id=$1),$3,$4,10,
+			    0.08,'A',10,$5,$6,$7,$8,'到店复拍发现短枝明显多于竞价说明',$9) RETURNING id`,
+			orderID, b7, uid["wholesaler01"], uid["farmer01"],
+			sorting, outbound, actual, reshoot, createdAt).Scan(&id)
+		tx.Exec(`UPDATE short_stem_reviews SET review_no=$1 WHERE id=$2`, fmt.Sprintf("SSR%08d", id), id)
+		return id
+	}
+	// 复核①：差价补偿，花农已确认账扣（本月结算可见账扣与返还）
+	ssr1 := addSSR(o4, 0.30,
+		"https://photos.example.com/reshoot/r1-1.jpg,https://photos.example.com/reshoot/r1-2.jpg", now.Add(-16*h))
+	tx.Exec(`UPDATE short_stem_reviews SET status='charged', resolution='price_diff', qc_note='实测短枝 30%，高于说明 8%，差价 10.56 元/扎',
+		confirmed_qc_by=$1, confirmed_qc_at=$2, price_diff_per_bundle=10.56, price_diff_amount=105.60,
+		farmer_responsibility='yes', farmer_charged=true, confirmed_by=$3, confirmed_at=$4 WHERE id=$5`,
+		uid["qc01"], now.Add(-14*h), uid["farmer01"], now.Add(-10*h), ssr1)
+
+	// 复核②：差价补偿，花农异议 → 两组证据保留、财务冻结 96.00 元
+	ssr2 := addSSR(o5, 0.28,
+		"https://photos.example.com/reshoot/r2-1.jpg,https://photos.example.com/reshoot/r2-2.jpg", now.Add(-15*h))
+	tx.Exec(`UPDATE short_stem_reviews SET status='disputed', resolution='price_diff', qc_note='实测短枝 28%，差价 9.60 元/扎',
+		confirmed_qc_by=$1, confirmed_qc_at=$2, price_diff_per_bundle=9.60, price_diff_amount=96.00,
+		farmer_responsibility='no', dispute_raised_at=$3, dispute_reason='出库分拣照片中枝长达标，疑为到店养护剪枝所致，申请第三方复尺',
+		frozen_amount=96.00 WHERE id=$4`,
+		uid["qc01"], now.Add(-12*h), now.Add(-9*h), ssr2)
+
+	// 复核③：下一批折扣（已质检确认，待花农确认账扣；承诺待下次结拍自动核销）
+	ssr3 := addSSR(o6, 0.25,
+		"https://photos.example.com/reshoot/r3-1.jpg,https://photos.example.com/reshoot/r3-2.jpg", now.Add(-14*h))
+	var dc1 int
+	tx.QueryRow(`INSERT INTO farmer_discount_commitments (farmer_id, review_id, rate) VALUES ($1,$2,0.10) RETURNING id`,
+		uid["farmer01"], ssr3).Scan(&dc1)
+	tx.Exec(`UPDATE short_stem_reviews SET status='confirmed', resolution='next_discount',
+		qc_note='下一批成交让利 10%', confirmed_qc_by=$1, confirmed_qc_at=$2, next_discount_rate=0.10, commitment_id=$3 WHERE id=$4`,
+		uid["qc01"], now.Add(-11*h), dc1, ssr3)
+
+	// 复核④：刚发起，待质检确认（两组证据已随单汇聚）
+	addSSR(o7, 0.26,
+		"https://photos.example.com/reshoot/r4-1.jpg,https://photos.example.com/reshoot/r4-2.jpg", now.Add(-2*h))
+
 	if err := tx.Commit(); err != nil {
 		log.Printf("演示数据提交失败: %v", err)
 		return
 	}
 	a.syncFarmerRanking(ctx)
-	log.Println("演示数据就绪：13 个账号、6 个批次、1 场进行中的竞价、库存/订单/退货/账期/调货样例")
+	log.Println("演示数据就绪：13 个账号、7 个批次、1 场进行中的竞价、库存/订单/退货/账期/调货样例，以及 4 单玫瑰短枝损耗复核（已账扣/争议冻结/待账扣/待质检）")
 }

@@ -102,10 +102,12 @@ const OSTATUS = {pending_payment:'待付款',paid:'已付款',dispatched:'配送
 const RSTATUS = {requested:'待审核',approved:'已赔付',rejected:'已驳回'};
 const RECV = {open:'未到期',overdue:'已逾期',settled:'已结清'};
 const TSTATUS = {pending:'待发车',in_transit:'在途',delivered:'已送达',arrived:'已到达'};
+const SSRSTATUS = {pending_qc:'待质检',confirmed:'已确认·待账扣',charged:'花农已确认账扣',disputed:'争议冻结中',closed_upheld:'争议维持·待账扣',closed_overturned:'争议已推翻'};
+const SSRRES = {price_diff:'差价补偿',return:'退货',next_discount:'下一批折扣'};
 const money = n => '¥' + Number(n||0).toFixed(2);
 const fmtT = s => s ? new Date(s).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
 const badge = (txt,cls='') => `<span class="badge ${cls}">${txt}</span>`;
-const stBadge = (map,v) => { const c = /报损|打回|驳回|取消|逾期|超时/.test(map[v]||v)?'r':(/待|在途|进行中|锁定/.test(map[v]||v)?'y':(/售|成交|送达|付款|通过|赔付|到达|结清/.test(map[v]||v)?'g':'')); return badge(map[v]||v,c); };
+const stBadge = (map,v) => { const c = /报损|打回|驳回|取消|逾期|超时|冻结|推翻/.test(map[v]||v)?'r':(/待|在途|进行中|锁定|争议/.test(map[v]||v)?'y':(/售|成交|送达|付款|通过|赔付|到达|结清|账扣/.test(map[v]||v)?'g':'')); return badge(map[v]||v,c); };
 const flagsTxt = f => (f||'').split(',').filter(Boolean).map(x=>({uneven_openness:'开放度不均',high_short_stem:'短枝比例高',temp_abnormal:'冷链失温'}[x]||x)).join('、');
 
 let S = { token: localStorage.getItem('fm_tok')||'', me: JSON.parse(localStorage.getItem('fm_me')||'null'), view:'' };
@@ -162,15 +164,15 @@ function logout(){
 }
 
 const MENUS = {
-  farmer:     [['batches','到货登记'],['dash','市场看板']],
+  farmer:     [['shortstem','短枝复核·账扣'],['batches','到货登记'],['dash','市场看板']],
   broker:     [['batches','到货登记'],['dash','市场看板']],
-  qc:         [['qc','质检台'],['returns','退货审核'],['storage','冷库与保鲜'],['dash','市场看板']],
-  wholesaler: [['auctions','凌晨竞价大厅'],['inventory','我的库存'],['orders','销售订单'],['dash','市场看板']],
-  shop:       [['market','采购市场'],['orders','我的订单'],['dash','市场看板']],
+  qc:         [['shortstem','短枝复核'],['qc','质检台'],['returns','退货审核'],['storage','冷库与保鲜'],['dash','市场看板']],
+  wholesaler: [['auctions','凌晨竞价大厅'],['inventory','我的库存'],['orders','销售订单'],['shortstem','短枝复核'],['dash','市场看板']],
+  shop:       [['market','采购市场'],['orders','我的订单'],['shortstem','短枝复核'],['dash','市场看板']],
   coldstore:  [['storage','冷库与保鲜'],['dash','市场看板']],
   logistics:  [['deliveries','配送调度'],['dash','市场看板']],
-  finance:    [['finance','财务结算'],['dash','市场看板']],
-  manager:    [['dash','市场看板'],['admin','拍卖管理'],['auctions','竞价大厅'],['returns','退货对账'],['finance','财务结算']],
+  finance:    [['shortstem','短枝复核·争议'],['finance','财务结算'],['dash','市场看板']],
+  manager:    [['dash','市场看板'],['admin','拍卖管理'],['auctions','竞价大厅'],['returns','退货对账'],['shortstem','短枝复核'],['finance','财务结算']],
 };
 
 function enter(){
@@ -197,6 +199,7 @@ async function vDash(){
   const cap = (ov.storage_slots||[]).reduce((a,s)=>a+s.capacity_bundles,0);
   const overdue = (ov.credit_risk||[]).reduce((a,x)=>a+x.overdue_amount,0);
   const retClaim = (ov.return_loss||[]).reduce((a,x)=>a+x.claim_amount,0);
+  const ssr = ov.short_stem_reviews||{};
   $('#view').innerHTML = `
   <div class="grid c4">
     <div class="stat"><div class="n">${c.active_auctions||0}</div><div class="t">进行中的凌晨竞价</div></div>
@@ -207,6 +210,10 @@ async function vDash(){
     <div class="stat"><div class="n">${c.timeout_orders||0}</div><div class="t">超时未付款取消</div></div>
     <div class="stat"><div class="n">${c.requested_returns||0}</div><div class="t">待审核退货</div></div>
     <div class="stat"><div class="n">${c.expired_batches||0}</div><div class="t">报损批次</div></div>
+    <div class="stat"><div class="n">${ssr.pending_qc||0}</div><div class="t">短枝复核待质检</div></div>
+    <div class="stat"><div class="n" style="color:var(--warn)">${money(ssr.frozen_amount)}</div><div class="t">短枝争议冻结差价</div></div>
+    <div class="stat"><div class="n" style="color:var(--acc2)">${money(ssr.charged_amount)}</div><div class="t">短枝复核已账扣</div></div>
+    <div class="stat"><div class="n" style="color:var(--bad)">${ssr.disputed||0}</div><div class="t">短枝争议中</div></div>
   </div>
   <div class="card"><h3>成交速度（按品类 / 产地）</h3>
     <table><tr><th>品类</th><th>产地</th><th>成交笔数</th><th>平均成交耗时</th><th>成交金额</th></tr>
@@ -514,7 +521,9 @@ async function vOrders(){
         ${o.status==='pending_payment'?`<button class="small green" onclick="payOrder(${o.id})">支付</button>
           <button class="small ghost" onclick="cancelOrder(${o.id})">取消</button>`:''}
         ${['pending_payment','paid'].includes(o.status)?`<button class="small ghost" onclick="splitOrder(${o.id},${o.bundles})">拆分</button>`:''}
-        ${['delivered','dispatched'].includes(o.status)?`<button class="small warn" onclick="returnOrder(${o.id},${o.bundles})">退货</button>`:''}
+        ${['delivered','dispatched'].includes(o.status)?`<button class="small warn" onclick="returnOrder(${o.id},${o.bundles})">退货</button>
+          <button class="small ghost" onclick="shortStemOrder(${o.id},${o.bundles})">短枝复核</button>`:''}
+        ${o.status==='completed'?`<button class="small ghost" onclick="shortStemOrder(${o.id},${o.bundles})">短枝复核</button>`:''}
       `:''}</td></tr>`).join('')||'<tr><td colspan=11 class=muted>暂无订单</td></tr>'}</table>
     <div class="muted" style="margin-top:6px">待付款订单超时自动取消并释放锁货；节日前可把订单拆成多张子单分拨配送。</div></div>`;
 }
@@ -535,6 +544,17 @@ const returnOrder = run(async (id, bundles)=>{
   const j = await api(`/orders/${id}/returns`,'POST',{bundles:+n, reason:r, loss_ratio:+ratio});
   toast(`退货申请已提交，索赔 ${money(j.claim_amount)}，等待质检裁定`); vOrders();
 });
+const shortStemOrder = run(async (id, bundles)=>{
+  const n = prompt(`短枝复核涉及扎数（出库 ${bundles} 扎）：`,String(Math.min(5,bundles))); if(!n) return;
+  const ratio = prompt('到店复拍实测短枝比例（须高于竞价说明，0-1）：','0.26'); if(!ratio) return;
+  const p1 = prompt('到店复拍照片 1（URL）：','https://photos.example.com/reshoot/new-1.jpg'); if(!p1) return;
+  const p2 = prompt('到店复拍照片 2（URL，可留空）：','https://photos.example.com/reshoot/new-2.jpg')||'';
+  const remark = prompt('花店反馈说明：','短枝比例明显高于竞价说明')||'';
+  const j = await api(`/orders/${id}/short-stem-reviews`,'POST',
+    {bundles:+n, actual_short_ratio:+ratio, reshoot_photos:[p1,p2].filter(Boolean), remark});
+  toast(`复核单 ${j.review_no} 已发起，系统已汇聚分拣照片/质检等级/出库扎数，等待质检确认（实测 ${Math.round(j.actual_short_ratio*100)}% vs 说明 ${Math.round(j.declared_short_ratio*100)}%）`);
+  go('shortstem');
+});
 
 /* ---------------- 配送调度 ---------------- */
 async function vDeliveries(){
@@ -542,22 +562,25 @@ async function vDeliveries(){
   $('#view').innerHTML = `
   <div class="card"><h3>待发货订单</h3>
     ${orders.length===0?'<div class="muted">暂无待发货订单</div>':
-    `<table><tr><th>订单号</th><th>品类</th><th>花店</th><th>扎数</th><th>发货</th></tr>
+    `<table><tr><th>订单号</th><th>品类</th><th>花店</th><th>扎数</th><th>分拣照片（短枝复核证据）</th><th>发车</th></tr>
     ${orders.map(o=>`<tr><td>${o.order_no}</td><td>${CAT[o.category]||o.category}</td><td>${esc(o.shop_name)}</td>
       <td>${o.bundles}</td>
-      <td><input id="d_city_${o.id}" placeholder="目的城市" value="本市" style="width:90px">
+      <td><input id="d_photo_${o.id}" placeholder="照片URL，多张逗号分隔" style="width:280px"
+            value="https://photos.example.com/sorting/${o.order_no}-1.jpg,https://photos.example.com/sorting/${o.order_no}-2.jpg"></td>
+      <td><input id="d_city_${o.id}" placeholder="目的城市" value="本市" style="width:80px">
         <button class="small" onclick="dispatch(${o.id})">发车</button></td></tr>`).join('')}</table>`}</div>
   <div class="card"><h3>配送单</h3>
     <table><tr><th>#</th><th>类型</th><th>单号</th><th>目的地</th><th>状态</th><th>发车</th><th>送达</th><th>操作</th></tr>
     ${deliveries.map(d=>`<tr><td>${d.id}</td><td>${d.transfer_id?'跨城调货':'订单'}</td>
-      <td>${d.order_no||('调货#'+d.transfer_id)}</td><td>${esc(d.to_city)}</td>
+      <td>${d.order_no||('调货#'+d.transfer_id)}</td><td>${esc(d.to_city)} ${(d.sorting_photos&&d.sorting_photos.length)?'📷':''}</td>
       <td>${stBadge(TSTATUS,d.status)}</td><td>${fmtT(d.departed_at)}</td><td>${fmtT(d.delivered_at)}</td>
       <td>${d.status!=='delivered'?`<button class="small green" onclick="deliver(${d.id})">确认送达</button>`:''}</td>
       </tr>`).join('')||'<tr><td colspan=8 class=muted>暂无配送单</td></tr>'}</table></div>`;
 }
 const dispatch = run(async oid=>{
-  await api('/deliveries','POST',{order_id:oid, to_city:$(`#d_city_${oid}`).value||'本市'});
-  toast('已发车'); vDeliveries();
+  await api('/deliveries','POST',{order_id:oid, to_city:$(`#d_city_${oid}`).value||'本市',
+    sorting_photos:$(`#d_photo_${oid}`).value});
+  toast('已发车，分拣照片已留存为短枝复核证据'); vDeliveries();
 });
 const deliver = run(async id=>{
   await api(`/deliveries/${id}/status`,'POST',{status:'delivered'});
@@ -650,6 +673,119 @@ const showSettle = run(async id=>{
       <td style="color:${l.amount<0?'var(--bad)':'var(--acc2)'}">${money(l.amount)}</td></tr>`).join('')}</table>`;
 });
 
+/* ---------------- 短枝损耗复核 / 账扣 ---------------- */
+const photoLinks = arr => (arr||[]).map(p=>`<a href="${esc(p)}" target="_blank" style="color:var(--acc)">📷</a>`).join(' ')||'—';
+async function vShortstem(){
+  const role = S.me.role;
+  const d = await api('/short-stem-reviews');
+  const list = d.items||[];
+  const z = d.summary||{};
+  const canQC = role==='qc';
+  const canClose = ['finance','qc','manager'].includes(role);
+  $('#view').innerHTML = `
+  <div class="grid c4">
+    <div class="stat"><div class="n">${list.length}</div><div class="t">复核单总数</div></div>
+    <div class="stat"><div class="n" style="color:var(--acc2)">${money(z.charged_amount)}</div><div class="t">花农已确认账扣${role==='farmer'?'（我的账扣）':''}</div></div>
+    <div class="stat"><div class="n" style="color:var(--warn)">${money(z.frozen_amount)}</div><div class="t">争议冻结差价（关闭前不入账）</div></div>
+    <div class="stat"><div class="n">${list.filter(x=>x.status==='pending_qc').length}</div><div class="t">待质检确认</div></div>
+  </div>
+  <div class="card"><h3>短枝损耗复核单</h3>
+    <div class="muted" style="margin-bottom:8px">花店反馈短枝比例高于竞价说明；系统汇聚两组证据——【到货质检/出库】分拣照片·质检等级·出库扎数，【到店】复拍实测短枝比例·复拍照片。花农异议期间两组证据保留、差价冻结。</div>
+    <table><tr><th>复核号</th><th>订单/批次</th><th>${role==='farmer'?'花店':'花农'}</th><th>扎数</th><th>说明→实测</th>
+      <th>处理</th><th>金额</th><th>两组证据</th><th>账扣状态</th><th>操作</th></tr>
+    ${list.map(x=>{
+      const a=x.evidence_arrival, s=x.evidence_store;
+      const who = role==='farmer' ? esc(x.shop_name) : esc(x.farmer_name);
+      let amt = x.resolution==='price_diff' ? money(x.price_diff_amount) :
+                x.resolution==='return' ? `${x.return_bundles}扎/${money(x.return_amount)}` :
+                x.resolution==='next_discount' ? `下批让利 ${Math.round(x.next_discount_rate*100)}%` : '—';
+      let ops = '';
+      if(canQC && x.status==='pending_qc') ops = `<button class="small green" onclick="confirmSSR(${x.id})">质检确认</button>`;
+      if(role==='farmer' && (x.status==='confirmed'||x.status==='closed_upheld'))
+        ops = `<button class="small green" onclick="ackSSR(${x.id})">确认账扣</button>
+               <button class="small warn" onclick="disputeSSR(${x.id})">提出异议</button>`;
+      if(canClose && x.status==='disputed')
+        ops = `<button class="small green" onclick="closeDispute(${x.id},true)">维持原判</button>
+               <button class="small ghost" onclick="closeDispute(${x.id},false)">推翻判定</button>`;
+      return `<tr>
+        <td>${x.review_no}</td>
+        <td>${x.order_no}<br><span class="muted">${x.batch_no} ${CAT[x.category]||x.category}</span></td>
+        <td>${who}</td><td>${x.bundles}</td>
+        <td><span class="muted">${Math.round(a.declared_short_ratio*100)}%</span> → <b style="color:var(--bad)">${Math.round(s.actual_short_ratio*100)}%</b></td>
+        <td>${x.resolution?badge(SSRRES[x.resolution]||x.resolution,'p'):'—'}</td>
+        <td>${amt}${x.status==='disputed'?`<br>${badge('冻结 '+money(x.frozen_amount),'y')}`:''}</td>
+        <td><span title="分拣照片/出库照片/质检等级/出库扎数">到货 ${photoLinks(a.sorting_photos)}</span><br>
+            <span title="到店复拍">到店 ${photoLinks(s.reshoot_photos)}</span></td>
+        <td>${stBadge(SSRSTATUS,x.status)}</td>
+        <td>${ops||'—'} <button class="small ghost" onclick="showSSR(${x.id})">详情</button></td>
+      </tr>`;
+    }).join('')||'<tr><td colspan=10 class=muted>暂无短枝复核单</td></tr>'}</table>
+    <div id="ssrDetail"></div></div>`;
+}
+const confirmSSR = run(async id=>{
+  const res = prompt('处理方式：price_diff 差价补偿 / return 退货 / next_discount 下一批折扣','price_diff');
+  if(!res) return;
+  let body={resolution:res, note:prompt('质检确认说明：','两组照片比对，实测短枝比例确实高于竞价说明')||''};
+  if(res==='price_diff'){
+    const v = prompt('每扎差价（元），留空则按 单价×(实测−说明) 自动核算：','')||'';
+    if(v) body.price_diff_per_bundle=+v;
+  } else if(res==='return'){
+    body.return_bundles=+(prompt('退货扎数（默认全部复核扎数）：','')||0);
+  } else if(res==='next_discount'){
+    body.next_discount_rate=+(prompt('下一批折扣率 0-0.5（如 0.10 表示让利 10%）：','0.10')||0);
+  }
+  const j = await api(`/short-stem-reviews/${id}/confirm`,'POST',body);
+  toast(`已确认：${SSRRES[res]||res}${j.price_diff_amount?'，差价 '+money(j.price_diff_amount):''}，等待花农确认账扣`);
+  vShortstem();
+});
+const ackSSR = run(async id=>{
+  await api(`/short-stem-reviews/${id}/ack-charge`,'POST',{});
+  toast('账扣已确认，状态已同步'); vShortstem();
+});
+const disputeSSR = run(async id=>{
+  const reason = prompt('异议理由（两组证据将保留，财务在争议关闭前冻结差价）：','');
+  if(!reason) return;
+  const j = await api(`/short-stem-reviews/${id}/dispute`,'POST',{reason});
+  toast(`已提出异议，差价 ${money(j.frozen_amount)} 冻结中`); vShortstem();
+});
+const closeDispute = run(async (id,uphold)=>{
+  const note = prompt(uphold?'维持原判说明（解冻，花农继续账扣确认）：':'推翻判定说明（解冻，差价不账扣，折扣承诺作废）：','')||'';
+  await api(`/short-stem-reviews/${id}/close-dispute`,'POST',{uphold,note});
+  toast(uphold?'争议关闭：维持原判':'争议关闭：推翻判定'); vShortstem();
+});
+const showSSR = run(async id=>{
+  const x = await api('/short-stem-reviews/'+id);
+  const a=x.evidence_arrival, s=x.evidence_store;
+  const picBlock = ps => (ps||[]).map(p=>`<div style="display:inline-block;margin:4px;padding:6px 10px;background:#0d1219;border:1px solid var(--line);border-radius:8px"><a href="${esc(p)}" target="_blank">${esc(p.split('/').pop())}</a></div>`).join('')||'<span class=muted>无</span>';
+  $('#ssrDetail').innerHTML = `
+    <h4 class="sec">${x.review_no} · ${x.order_no}（${x.batch_no}）复核详情</h4>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div class="card" style="margin:0"><h3>第 1 组证据：到货质检 / 出库</h3>
+        <div class="muted">分拣照片（出库拍摄）：</div>${picBlock(a.sorting_photos)}
+        <div class="muted" style="margin-top:8px">出库照片：</div>${picBlock(a.outbound_photo?[a.outbound_photo]:[])}
+        <div class="muted" style="margin-top:8px">质检等级：<b>${a.qc_grade}</b>　竞价说明短枝比例：<b>${Math.round(a.declared_short_ratio*100)}%</b>　出库扎数：<b>${a.outbound_bundles}</b></div>
+      </div>
+      <div class="card" style="margin:0"><h3>第 2 组证据：到店复拍</h3>
+        <div class="muted">到店复拍照片：</div>${picBlock(s.reshoot_photos)}
+        <div class="muted" style="margin-top:8px">实测短枝比例：<b style="color:var(--bad)">${Math.round(s.actual_short_ratio*100)}%</b></div>
+        <div class="muted">花店备注：${esc(s.shop_remark)||'—'}</div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px"><h3>处理与账扣状态</h3>
+      <table>
+        <tr><th>当前状态</th><td>${stBadge(SSRSTATUS,x.status)}</td>
+            <th>处理方式</th><td>${x.resolution?SSRRES[x.resolution]:'待质检确认'}</td></tr>
+        <tr><th>差价补偿</th><td>${money(x.price_diff_per_bundle)}/扎 × ${x.bundles} 扎 = ${money(x.price_diff_amount)}</td>
+            <th>退货</th><td>${x.return_bundles} 扎 = ${money(x.return_amount)}</td></tr>
+        <tr><th>下一批折扣</th><td>${x.next_discount_rate?Math.round(x.next_discount_rate*100)+'%':'—'} ${x.commitment?badge({pending:'待核销',redeemed:'已核销 '+money(x.commitment.redeemed_amount),voided:'已作废'}[x.commitment.status]||x.commitment.status):''}</td>
+            <th>冻结金额</th><td>${money(x.frozen_amount)}</td></tr>
+        <tr><th>质检备注</th><td colspan=3>${esc(x.qc_note)||'—'}</td></tr>
+        <tr><th>花农账扣</th><td colspan=3>${x.farmer_charged?badge('已确认账扣 '+fmtT(x.confirmed_at),'g'):badge({pending:'待确认',yes:'已确认',no:'有异议'}[x.farmer_responsibility]||'待确认','y')}</td></tr>
+        <tr><th>异议理由</th><td colspan=3>${esc(x.dispute_reason)||'—'} ${x.dispute_raised_at?fmtT(x.dispute_raised_at):''}</td></tr>
+        <tr><th>争议关闭</th><td colspan=3>${esc(x.close_note)||'—'} ${x.closed_at?fmtT(x.closed_at):''}</td></tr>
+      </table></div>`;
+});
+
 /* ---------------- 拍卖管理（管理方） ---------------- */
 async function vAdmin(){
   const [batches, rank] = await Promise.all([api('/batches'), api('/farmers/ranking')]);
@@ -681,7 +817,7 @@ const createAuction = run(async ()=>{
 
 const VIEWS = { dash:vDash, batches:vBatches, qc:vQC, storage:vStorage, auctions:vAuctions,
   inventory:vInventory, market:vMarket, orders:vOrders, deliveries:vDeliveries,
-  returns:vReturns, finance:vFinance, admin:vAdmin };
+  returns:vReturns, finance:vFinance, admin:vAdmin, shortstem:vShortstem };
 
 /* ---------------- 启动 ---------------- */
 (async function(){
