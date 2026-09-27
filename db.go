@@ -291,6 +291,77 @@ CREATE TABLE IF NOT EXISTS settlement_lines (
   amount NUMERIC(14,2) NOT NULL
 );
 
+-- 短枝损耗复核：花店到店反馈短枝比例高于竞价说明 → 调取两组证据 → 质检确认 → 处置 → 异议冻结 → 花农确认账扣
+CREATE TABLE IF NOT EXISTS short_stem_reviews (
+  id SERIAL PRIMARY KEY,
+  review_no TEXT UNIQUE,
+  order_id INT NOT NULL REFERENCES orders(id),
+  batch_id INT NOT NULL REFERENCES flower_batches(id),
+  shop_id INT NOT NULL REFERENCES users(id),
+  wholesaler_id INT NOT NULL REFERENCES users(id),
+  farmer_id INT NOT NULL REFERENCES users(id),
+  bundles INT NOT NULL,                          -- 涉及扎数
+  declared_short_ratio NUMERIC(5,3) NOT NULL,   -- 竞价说明短枝比例（取自到货质检）
+  observed_short_ratio NUMERIC(5,3) NOT NULL,   -- 到店复拍短枝比例（花店反馈）
+  price_per_bundle NUMERIC(10,2) NOT NULL,      -- 订单锁定价（计算差价补偿口径）
+  -- requested 待质检确认 / confirmed 质检已确认待花农账扣 / disputed 花农异议冻结中
+  -- acknowledged 花农已确认账扣 / waived 争议关闭免扣 / rejected 复核不成立
+  status TEXT NOT NULL DEFAULT 'requested',
+  disposition TEXT NOT NULL DEFAULT '',          -- price_compensation 差价补偿 / return_goods 退货 / next_batch_discount 下一批折扣
+  compensation_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+  next_discount_percent NUMERIC(5,2) NOT NULL DEFAULT 0,
+  linked_return_id INT REFERENCES returns(id),   -- 退货处置关联的退货单
+  confirmed_by INT REFERENCES users(id),
+  confirmed_at TIMESTAMPTZ,
+  acknowledged_at TIMESTAMPTZ,                   -- 花农确认账扣时间
+  closed_by INT REFERENCES users(id),
+  closed_at TIMESTAMPTZ,
+  close_note TEXT NOT NULL DEFAULT '',
+  shop_note TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 复核证据：两组固定保留 —— 到货质检组（分拣照片/质检等级/出库扎数）与到店复拍组
+CREATE TABLE IF NOT EXISTS review_evidences (
+  id SERIAL PRIMARY KEY,
+  review_id INT NOT NULL REFERENCES short_stem_reviews(id) ON DELETE CASCADE,
+  group_name TEXT NOT NULL,    -- arrival_qc 到货质检组 / shop_recheck 到店复拍组
+  evidence_type TEXT NOT NULL, -- sorting_photo 分拣照片 / qc_grade 质检等级 / outbound_bundles 出库扎数 / shop_photo 到店复拍
+  photo_url TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '',
+  uploaded_by INT NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 花农对损耗判定的异议
+CREATE TABLE IF NOT EXISTS review_disputes (
+  id SERIAL PRIMARY KEY,
+  review_id INT NOT NULL REFERENCES short_stem_reviews(id),
+  farmer_id INT NOT NULL REFERENCES users(id),
+  reason TEXT NOT NULL,
+  -- open 争议中 / closed_uphold 维持原判 / closed_adjusted 调整差价 / closed_waived 免除账扣
+  status TEXT NOT NULL DEFAULT 'open',
+  closed_by INT REFERENCES users(id),
+  closed_at TIMESTAMPTZ,
+  close_note TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 财务冻结与花农账扣（账扣状态同步花农端）
+CREATE TABLE IF NOT EXISTS review_ledger (
+  id SERIAL PRIMARY KEY,
+  review_id INT NOT NULL REFERENCES short_stem_reviews(id),
+  farmer_id INT NOT NULL REFERENCES users(id),
+  amount NUMERIC(14,2) NOT NULL,               -- 差价补偿账扣金额（退货/折扣处置为 0）
+  -- pending_ack 待花农确认 / frozen 争议冻结中 / confirmed 花农已确认 / deducted 已入结算 / released 已解冻免扣
+  status TEXT NOT NULL DEFAULT 'pending_ack',
+  frozen_by INT REFERENCES users(id),
+  frozen_at TIMESTAMPTZ,
+  confirmed_at TIMESTAMPTZ,
+  settled_settlement_id INT REFERENCES settlements(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_batches_farmer ON flower_batches(farmer_id);
 CREATE INDEX IF NOT EXISTS idx_batches_status ON flower_batches(status);
 CREATE INDEX IF NOT EXISTS idx_auctions_status_ends ON auctions(status, ends_at);

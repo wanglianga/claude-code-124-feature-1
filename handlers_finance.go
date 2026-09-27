@@ -26,11 +26,11 @@ func (a *app) handleListReceivables(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	for rows.Next() {
 		var (
-			id, orderID     int
-			amount          float64
-			due, createdAt  time.Time
+			id, orderID           int
+			amount                float64
+			due, createdAt        time.Time
 			status, name, orderNo string
-			settledAt       *time.Time
+			settledAt             *time.Time
 		)
 		if rows.Scan(&id, &amount, &due, &status, &settledAt, &createdAt, &name, &orderNo, &orderID) == nil {
 			daysOverdue := 0
@@ -133,28 +133,35 @@ func (a *app) handleGenerateSettlement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	// 重算月份：先把上月已计入结算的短枝账扣回退为「花农已确认」，随本次重算重新计入
+	if _, err := tx.ExecContext(r.Context(),
+		`UPDATE review_ledger SET status='confirmed', settled_settlement_id=NULL
+		 WHERE settled_settlement_id IN (SELECT id FROM settlements WHERE month=$1)`, in.Month); err != nil {
+		fail(w, 500, err.Error())
+		return
+	}
 	if _, err := tx.ExecContext(r.Context(), `DELETE FROM settlements WHERE month=$1`, in.Month); err != nil {
 		fail(w, 500, err.Error())
 		return
 	}
 
-	insertSettlement := func(role string, entityID int, gross, loss, storage, credit, net float64, lines []settleLine) error {
+	insertSettlement := func(role string, entityID int, gross, loss, storage, credit, net float64, lines []settleLine) (int, error) {
 		var sid int
 		err := tx.QueryRowContext(r.Context(),
 			`INSERT INTO settlements (month, entity_role, entity_id, gross_amount, loss_deduction, storage_fee, credit_deduction, net_amount, generated_by)
 			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
 			in.Month, role, entityID, round2(gross), round2(loss), round2(storage), round2(credit), round2(net), u.ID).Scan(&sid)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		for _, l := range lines {
 			if _, err := tx.ExecContext(r.Context(),
 				`INSERT INTO settlement_lines (settlement_id, kind, ref_type, ref_id, description, amount)
 				 VALUES ($1,$2,$3,$4,$5,$6)`, sid, l.kind, l.refType, l.refID, l.desc, round2(l.amount)); err != nil {
-				return err
+				return 0, err
 			}
 		}
-		return nil
+		return sid, nil
 	}
 
 	// 冷库费：入库时长 × 扎数 × 费率
@@ -202,6 +209,9 @@ func (a *app) handleGenerateSettlement(w http.ResponseWriter, r *http.Request) {
 			`SELECT r.id, r.claim_amount, b.batch_no, r.reason FROM returns r
 			 JOIN flower_batches b ON b.id=r.batch_id
 			 WHERE b.farmer_id=$1 AND r.status='approved' AND r.farmer_responsible
+			   AND NOT EXISTS (
+			     SELECT 1 FROM short_stem_reviews sr WHERE sr.linked_return_id=r.id
+			       AND sr.status IN ('confirmed','disputed','waived'))
 			   AND r.reviewed_at>=$2 AND r.reviewed_at<$3`, fid, start, end)
 		if err != nil {
 			fail(w, 500, err.Error())
@@ -241,12 +251,46 @@ func (a *app) handleGenerateSettlement(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		rows.Close()
+		// 短枝损耗复核账扣：仅计入花农已确认（含已入账）的差价补偿；争议冻结中/待确认/已解冻不计
+		deductIDs := []int{}
+		rows, err = tx.QueryContext(r.Context(),
+			`SELECT rv.id, COALESCE(rv.review_no,''), l.id, l.amount, b.batch_no FROM review_ledger l
+			 JOIN short_stem_reviews rv ON rv.id=l.review_id
+			 JOIN flower_batches b ON b.id=rv.batch_id
+			 WHERE l.farmer_id=$1 AND l.status IN ('confirmed','deducted') AND l.amount>0
+			   AND COALESCE(rv.acknowledged_at, rv.confirmed_at)>=$2
+			   AND COALESCE(rv.acknowledged_at, rv.confirmed_at)<$3`, fid, start, end)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		for rows.Next() {
+			var rvID, lid int
+			var rvNo, no string
+			var amt float64
+			if rows.Scan(&rvID, &rvNo, &lid, &amt, &no) == nil {
+				loss += amt
+				deductIDs = append(deductIDs, lid)
+				lines = append(lines, settleLine{"short_stem_deduction", "short_stem_review",
+					fmt.Sprintf("批次 %s 短枝损耗差价补偿账扣（%s）", no, rvNo), rvID, -amt})
+			}
+		}
+		rows.Close()
 		if len(lines) == 0 {
 			continue
 		}
-		if err := insertSettlement("farmer", fid, gross, loss, storage, 0, gross-loss-storage, lines); err != nil {
+		sid, err := insertSettlement("farmer", fid, gross, loss, storage, 0, gross-loss-storage, lines)
+		if err != nil {
 			fail(w, 500, err.Error())
 			return
+		}
+		if len(deductIDs) > 0 {
+			if _, err := tx.ExecContext(r.Context(),
+				`UPDATE review_ledger SET status='deducted', settled_settlement_id=$1 WHERE id = ANY($2)`,
+				sid, deductIDs); err != nil {
+				fail(w, 500, err.Error())
+				return
+			}
 		}
 	}
 
@@ -342,7 +386,7 @@ func (a *app) handleGenerateSettlement(w http.ResponseWriter, r *http.Request) {
 		if len(lines) == 0 {
 			continue
 		}
-		if err := insertSettlement("wholesaler", wid, gross, loss, storage, 0, gross-loss-storage, lines); err != nil {
+		if _, err := insertSettlement("wholesaler", wid, gross, loss, storage, 0, gross-loss-storage, lines); err != nil {
 			fail(w, 500, err.Error())
 			return
 		}
@@ -394,6 +438,26 @@ func (a *app) handleGenerateSettlement(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		rows.Close()
+		// 短枝损耗复核差价补偿：花农确认账扣后，扣款返还给花店（争议冻结中不计；退货/折扣不在此产生现金流）
+		rows, err = tx.QueryContext(r.Context(),
+			`SELECT rv.id, COALESCE(rv.review_no,''), rv.compensation_amount FROM short_stem_reviews rv
+			 WHERE rv.shop_id=$1 AND rv.disposition='price_compensation' AND rv.status='acknowledged'
+			   AND rv.acknowledged_at>=$2 AND rv.acknowledged_at<$3`, sid, start, end)
+		if err != nil {
+			fail(w, 500, err.Error())
+			return
+		}
+		for rows.Next() {
+			var rvID int
+			var no string
+			var amt float64
+			if rows.Scan(&rvID, &no, &amt) == nil && amt > 0 {
+				loss += amt
+				lines = append(lines, settleLine{"short_stem_refund", "short_stem_review",
+					fmt.Sprintf("短枝损耗差价补偿返还（%s）", no), rvID, -amt})
+			}
+		}
+		rows.Close()
 		rows, err = tx.QueryContext(r.Context(),
 			`SELECT c.id, c.amount, c.due_date, c.settled_at, c.status FROM credit_receivables c
 			 WHERE c.customer_id=$1 AND c.due_date>=$2 AND c.due_date<$3
@@ -431,7 +495,7 @@ func (a *app) handleGenerateSettlement(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// 花店为付款方：净额 = 采购 − 退货返还 + 罚息
-		if err := insertSettlement("shop", sid, gross, loss, 0, credit, gross-loss+credit, lines); err != nil {
+		if _, err := insertSettlement("shop", sid, gross, loss, 0, credit, gross-loss+credit, lines); err != nil {
 			fail(w, 500, err.Error())
 			return
 		}
@@ -491,10 +555,10 @@ func (a *app) handleListSettlements(w http.ResponseWriter, r *http.Request) {
 	out := []map[string]any{}
 	for rows.Next() {
 		var (
-			id, entityID                int
-			month, role, name           string
+			id, entityID                      int
+			month, role, name                 string
 			gross, loss, storage, credit, net float64
-			at                          time.Time
+			at                                time.Time
 		)
 		if rows.Scan(&id, &month, &role, &entityID, &gross, &loss, &storage, &credit, &net, &at, &name) == nil {
 			out = append(out, map[string]any{
@@ -515,10 +579,10 @@ func (a *app) handleGetSettlement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var (
-		month, role, name           string
-		entityID                    int
+		month, role, name                 string
+		entityID                          int
 		gross, loss, storage, credit, net float64
-		at                          time.Time
+		at                                time.Time
 	)
 	err := a.db.QueryRowContext(r.Context(),
 		`SELECT s.month, s.entity_role, s.entity_id, s.gross_amount, s.loss_deduction, s.storage_fee,

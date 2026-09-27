@@ -102,6 +102,12 @@ const OSTATUS = {pending_payment:'待付款',paid:'已付款',dispatched:'配送
 const RSTATUS = {requested:'待审核',approved:'已赔付',rejected:'已驳回'};
 const RECV = {open:'未到期',overdue:'已逾期',settled:'已结清'};
 const TSTATUS = {pending:'待发车',in_transit:'在途',delivered:'已送达',arrived:'已到达'};
+const SRV = {requested:'待质检确认',confirmed:'待花农账扣',disputed:'异议冻结中',acknowledged:'花农已确认账扣',waived:'争议关闭免扣',rejected:'复核不成立'};
+const DISP = {price_compensation:'差价补偿',return_goods:'退货',next_batch_discount:'下一批折扣','':''};
+const LEDGER = {'':'—',pending_ack:'待花农确认',frozen:'争议冻结中',confirmed:'花农已确认',deducted:'已入结算',released:'已解冻免扣'};
+const DSTATUS = {open:'争议处理中',closed_uphold:'维持原判',closed_adjusted:'调整差价',closed_waived:'免除账扣','':''};
+const EVGROUP = {arrival_qc:'到货质检组',shop_recheck:'到店复拍组'};
+const EVTYPE = {sorting_photo:'分拣照片',qc_grade:'质检等级',outbound_bundles:'出库扎数',shop_photo:'到店复拍'};
 const money = n => '¥' + Number(n||0).toFixed(2);
 const fmtT = s => s ? new Date(s).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
 const badge = (txt,cls='') => `<span class="badge ${cls}">${txt}</span>`;
@@ -162,15 +168,15 @@ function logout(){
 }
 
 const MENUS = {
-  farmer:     [['batches','到货登记'],['dash','市场看板']],
+  farmer:     [['batches','到货登记'],['shortstem','短枝复核'],['dash','市场看板']],
   broker:     [['batches','到货登记'],['dash','市场看板']],
-  qc:         [['qc','质检台'],['returns','退货审核'],['storage','冷库与保鲜'],['dash','市场看板']],
-  wholesaler: [['auctions','凌晨竞价大厅'],['inventory','我的库存'],['orders','销售订单'],['dash','市场看板']],
-  shop:       [['market','采购市场'],['orders','我的订单'],['dash','市场看板']],
+  qc:         [['qc','质检台'],['returns','退货审核'],['shortstem','短枝复核'],['storage','冷库与保鲜'],['dash','市场看板']],
+  wholesaler: [['auctions','凌晨竞价大厅'],['inventory','我的库存'],['orders','销售订单'],['shortstem','短枝复核'],['dash','市场看板']],
+  shop:       [['market','采购市场'],['orders','我的订单'],['shortstem','短枝复核'],['dash','市场看板']],
   coldstore:  [['storage','冷库与保鲜'],['dash','市场看板']],
   logistics:  [['deliveries','配送调度'],['dash','市场看板']],
-  finance:    [['finance','财务结算'],['dash','市场看板']],
-  manager:    [['dash','市场看板'],['admin','拍卖管理'],['auctions','竞价大厅'],['returns','退货对账'],['finance','财务结算']],
+  finance:    [['finance','财务结算'],['shortstem','短枝复核·冻结'],['dash','市场看板']],
+  manager:    [['dash','市场看板'],['admin','拍卖管理'],['auctions','竞价大厅'],['returns','退货对账'],['shortstem','短枝复核'],['finance','财务结算']],
 };
 
 function enter(){
@@ -206,6 +212,10 @@ async function vDash(){
     <div class="stat"><div class="n">${c.pending_orders||0}</div><div class="t">待付款订单</div></div>
     <div class="stat"><div class="n">${c.timeout_orders||0}</div><div class="t">超时未付款取消</div></div>
     <div class="stat"><div class="n">${c.requested_returns||0}</div><div class="t">待审核退货</div></div>
+    <div class="stat"><div class="n">${ov.short_stem?.requested||0}</div><div class="t">待质检确认短枝复核</div></div>
+    <div class="stat"><div class="n" style="color:var(--warn)">${ov.short_stem?.disputed||0}</div><div class="t">短枝争议冻结中</div></div>
+    <div class="stat"><div class="n" style="color:var(--bad)">${money(ov.short_stem?.frozen_amount||0)}</div><div class="t">争议冻结差价</div></div>
+    <div class="stat"><div class="n">${money(ov.short_stem?.confirmed_amount||0)}</div><div class="t">花农已确认短枝账扣</div></div>
     <div class="stat"><div class="n">${c.expired_batches||0}</div><div class="t">报损批次</div></div>
   </div>
   <div class="card"><h3>成交速度（按品类 / 产地）</h3>
@@ -221,6 +231,11 @@ async function vDash(){
     <table><tr><th>品类</th><th>产地</th><th>售出(扎)</th><th>退货(扎)</th><th>退货率</th><th>赔付金额</th></tr>
     ${(ov.return_loss||[]).map(x=>`<tr><td>${CAT[x.category]||x.category}</td><td>${esc(x.origin)}</td>
       <td>${x.sold_bundles}</td><td>${x.returned_bundles}</td><td>${x.return_rate_pct}%</td><td>${money(x.claim_amount)}</td></tr>`).join('')||'<tr><td colspan=6 class=muted>暂无</td></tr>'}</table></div>
+  <div class="card"><h3>短枝损耗复核（到店短枝高于竞价说明）</h3>
+    <table><tr><th>品类</th><th>产地</th><th>复核单数</th><th>平均短枝差值</th><th>已账扣补偿</th></tr>
+    ${(ov.short_stem?.by_category||[]).map(x=>`<tr><td>${CAT[x.category]||x.category}</td><td>${esc(x.origin)}</td>
+      <td>${x.reviews}</td><td>${badge('+'+x.avg_ratio_gap_pct+'%','y')}</td><td>${money(x.compensated_amount)}</td></tr>`).join('')
+      ||'<tr><td colspan=5 class=muted>暂无短枝复核</td></tr>'}</table></div>
   <div class="card"><h3>账期风险</h3>
     <table><tr><th>账期客户</th><th>额度</th><th>未到期</th><th>已逾期</th><th>最长逾期</th></tr>
     ${(ov.credit_risk||[]).map(x=>`<tr><td>${esc(x.customer)}</td><td>${money(x.credit_limit)}</td>
@@ -515,6 +530,7 @@ async function vOrders(){
           <button class="small ghost" onclick="cancelOrder(${o.id})">取消</button>`:''}
         ${['pending_payment','paid'].includes(o.status)?`<button class="small ghost" onclick="splitOrder(${o.id},${o.bundles})">拆分</button>`:''}
         ${['delivered','dispatched'].includes(o.status)?`<button class="small warn" onclick="returnOrder(${o.id},${o.bundles})">退货</button>`:''}
+        ${['delivered','completed'].includes(o.status)?`<button class="small ghost" onclick="go('shortstem')">短枝复核</button>`:''}
       `:''}</td></tr>`).join('')||'<tr><td colspan=11 class=muted>暂无订单</td></tr>'}</table>
     <div class="muted" style="margin-top:6px">待付款订单超时自动取消并释放锁货；节日前可把订单拆成多张子单分拨配送。</div></div>`;
 }
@@ -679,9 +695,158 @@ const createAuction = run(async ()=>{
   toast('专场已发起'); go('auctions');
 });
 
+/* ---------------- 短枝损耗复核 ---------------- */
+function evidenceBlock(x){
+  const groups = {arrival_qc:[], shop_recheck:[]};
+  (x.evidences||[]).forEach(e=>(groups[e.group]||(groups[e.group]=[])).push(e));
+  const block = g => `
+    <div style="flex:1;min-width:280px">
+      <b style="color:var(--dim)">${EVGROUP[g]}</b>
+      <table style="margin-top:4px"><tr><th>类型</th><th>内容</th></tr>
+      ${groups[g].map(e=>`<tr><td>${EVTYPE[e.type]||e.type}</td>
+        <td>${e.photo_url?`<a href="${esc(e.photo_url)}" target="_blank" style="color:var(--acc)">${esc(e.photo_url)}</a>`:''}
+        ${e.detail?`<div class="muted">${esc(e.detail)}</div>`:''}</td></tr>`).join('')
+        ||'<tr><td colspan=2 class=muted>暂无</td></tr>'}</table>
+    </div>`;
+  return `<div style="display:flex;gap:14px;flex-wrap:wrap;margin:6px 0">${block('arrival_qc')}${block('shop_recheck')}</div>`;
+}
+async function vShortstem(){
+  const list = await api('/short-stem-reviews');
+  const role = S.me.role;
+  const isQC = role==='qc', isFarmer = role==='farmer', isFinance = role==='finance', isManager = role==='manager';
+  const isShop = role==='shop';
+  let createHTML = '';
+  if(isShop){
+    const orders = (await api('/orders')).filter(o=>['delivered','completed'].includes(o.status));
+    const opts = orders.map(o=>`<option value="${o.id}">${o.order_no} · ${CAT[o.category]||o.category} ${o.batch_no} · ${o.bundles}扎 · ${fmtT(o.delivered_at)}送达</option>`).join('');
+    createHTML = `
+    <div class="card"><h3>到店反馈短枝过多（高于竞价说明 → 发起复核）</h3>
+      ${opts?`<div class="row">
+        <div><label>已送达订单</label><select id="ss_order" style="min-width:280px">${opts}</select></div>
+        <div><label>涉及扎数（留空=整单）</label><input id="ss_bundles" type="number" placeholder="整单" style="width:120px"></div>
+        <div><label>到店复拍短枝比例(0-1)</label><input id="ss_ratio" type="number" step="0.01" min="0" max="1" value="0.25" style="width:140px"></div>
+        <div><label>分拣照片URL（可选，服务调取）</label><input id="ss_sort" placeholder="https://…/sorting.jpg" style="width:220px"></div>
+        <div><label>到店复拍照片URL（必填）</label><input id="ss_photo" placeholder="https://…/recheck.jpg" style="width:220px"></div>
+        <div><label>备注</label><input id="ss_note" placeholder="到店实测短枝偏多"></div>
+        <div><button onclick="createReview()">发起复核</button></div>
+      </div><div class="muted" style="margin-top:6px">服务将自动调取并保留两组证据：到货质检组（分拣照片、质检等级、出库扎数）与到店复拍组。</div>`
+      :'<div class="muted">暂无已送达订单，需要订单送达后才能发起短枝复核。</div>'}
+    </div>`;
+  }
+  const frozen = list.filter(x=>x.ledger&&x.ledger.status==='frozen');
+  let finHTML = '';
+  if(isFinance){
+    finHTML = `
+    <div class="card"><h3>争议冻结差价（争议关闭前冻结，不计入花农结算）</h3>
+      <table><tr><th>复核单</th><th>订单</th><th>花农</th><th>冻结金额</th><th>冻结时间</th><th>操作</th></tr>
+      ${frozen.map(x=>`<tr><td>${x.review_no}</td><td>${x.order_no}</td><td>${esc(x.farmer_name)}</td>
+        <td>${badge(money(x.ledger.amount),'r')}</td><td>${fmtT(x.ledger.frozen_at)}</td>
+        <td><button class="small ghost" onclick="freezeReview(${x.id})">确认冻结</button></td></tr>`).join('')
+        ||'<tr><td colspan=6 class=muted>暂无冻结中的差价</td></tr>'}</table></div>`;
+  }
+  $('#view').innerHTML = `
+  ${createHTML}
+  ${finHTML}
+  <div class="card"><h3>短枝损耗复核（${role==='farmer'?'花农端·账扣状态同步':'按角色展示相关单据'} · 共 ${list.length} 单）</h3>
+    <table style="margin-bottom:8px"><tr>
+      <th>复核单</th><th>订单/批次</th><th>花店</th><th>花农</th><th>扎数</th><th>竞价说明</th><th>到店/实测</th>
+      <th>处置</th><th>差价</th><th>复核状态</th><th>账扣状态</th><th>操作</th>
+    </tr>
+    ${list.map(x=>{
+      const ratioTxt = v=>Math.round((v||0)*100)+'%';
+      return `<tr>
+      <td>${x.review_no}<div class="muted">${fmtT(x.created_at)}</div></td>
+      <td>${x.order_no}<div class="muted">${CAT[x.category]||x.category} ${x.batch_no}</div></td>
+      <td>${esc(x.shop_name)}</td><td>${esc(x.farmer_name)}</td>
+      <td>${x.bundles}</td>
+      <td>${ratioTxt(x.declared_short_ratio)}</td>
+      <td><b style="color:var(--warn)">${ratioTxt(x.observed_short_ratio)}</b></td>
+      <td>${x.disposition?badge(DISP[x.disposition]||x.disposition,'p'):'—'}
+        ${x.linked_return_id?`<div class="muted">退货#${x.linked_return_id}</div>`:''}
+        ${x.next_discount_percent?`<div class="muted">下批${x.next_discount_percent}%折</div>`:''}</td>
+      <td>${x.compensation_amount?money(x.compensation_amount):'—'}</td>
+      <td>${stBadge(SRV,x.status)}</td>
+      <td>${x.ledger&&x.ledger.status?stBadge(LEDGER,x.ledger.status):'—'}</td>
+      <td style="white-space:normal">
+        <button class="small ghost" onclick="showEvidence(${x.id})">两组证据</button>
+        ${isQC&&x.status==='requested'?`<button class="small warn" onclick="confirmReview(${x.id})">质检确认</button>`:''}
+        ${isFarmer&&x.status==='confirmed'?`<button class="small ghost" onclick="disputeReview(${x.id})">提出异议</button>
+          <button class="small green" onclick="ackReview(${x.id})">确认${x.ledger.amount>0?'账扣':'判责'}</button>`:''}
+        ${(isManager||isQC)&&x.status==='disputed'?`<button class="small warn" onclick="closeDispute(${x.id})">关闭争议</button>`:''}
+        ${isFinance&&x.status==='disputed'&&x.ledger.status!=='frozen'?`<button class="small ghost" onclick="freezeReview(${x.id})">冻结差价</button>`:''}
+        ${isShop&&x.status==='requested'?`<button class="small ghost" onclick="addShopEvidence(${x.id})">补复拍</button>`:''}
+      </td></tr>
+      <tr id="ev_${x.id}" style="display:none"><td colspan="12">${evidenceBlock(x)}
+        ${x.dispute?`<div class="card" style="background:#141b26;margin:6px 0">
+          <b>花农异议</b> ${stBadge(DSTATUS,x.dispute.status)}
+          <div style="margin:4px 0">${esc(x.dispute.reason)}</div>
+          <div class="muted">${esc(x.dispute.farmer_name)} · ${fmtT(x.dispute.created_at)}${x.dispute.close_note?(' · 关闭说明：'+esc(x.dispute.close_note)):''}</div></div>`:''}
+        ${x.close_note?`<div class="muted">关闭说明：${esc(x.close_note)}</div>`:''}
+      </td></tr>`;
+    }).join('')||'<tr><td colspan=12 class=muted>暂无短枝复核单</td></tr>'}</table>
+    <div class="muted">流程：花店反馈 → 服务调取两组证据 → 质检确认并选择处置（差价补偿/退货/下一批折扣）→
+      花农确认账扣；有异议时两组证据封存、财务冻结差价，争议关闭（维持/调整/免除）后账扣状态同步花农端。</div>
+  </div>`;
+}
+function showEvidence(id){ $('#ev_'+id).style.display = $('#ev_'+id).style.display==='none'?'':'none'; }
+const createReview = run(async ()=>{
+  const body = {
+    observed_ratio:+$('#ss_ratio').value, shop_photo_url:$('#ss_photo').value.trim(),
+    sorting_photo_url:$('#ss_sort').value.trim(), note:$('#ss_note').value };
+  if($('#ss_bundles').value) body.bundles = +$('#ss_bundles').value;
+  const j = await api(`/orders/${$('#ss_order').value}/short-stem-review`,'POST',body);
+  toast(`复核单 ${j.review_no} 已发起：竞价说明 ${Math.round(j.declared_short_ratio*100)}% → 到店 ${Math.round(j.observed_short_ratio*100)}%，等待质检确认`);
+  vShortstem();
+});
+const addShopEvidence = run(async id=>{
+  const url = prompt('到店复拍照片 URL：'); if(!url) return;
+  const detail = prompt('说明（可留空）：','补充到店复拍')||'';
+  await api(`/short-stem-reviews/${id}/evidence`,'POST',{evidence_type:'shop_photo',photo_url:url,detail});
+  toast('到店复拍证据已补充'); vShortstem();
+});
+const confirmReview = run(async id=>{
+  const ratio = prompt('复核实测短枝比例(0-1，须高于竞价说明)：','0.25'); if(ratio===null) return;
+  const disp = prompt('处置方式：price_compensation差价补偿 / return_goods退货 / next_batch_discount下一批折扣：','price_compensation'); if(!disp) return;
+  const body = {confirm:true, observed_ratio:+ratio, disposition:disp};
+  if(disp==='price_compensation'){
+    const a = prompt('差价补偿金额（留空=按 扎数×单价×短枝差值 自动核算）：','');
+    if(a) body.compensation_amount = +a;
+  }
+  if(disp==='next_batch_discount'){
+    body.next_discount_percent = +(prompt('下一批折扣百分比(0-100)：','5')||0);
+  }
+  body.note = prompt('质检备注：','两组证据比对，短枝高于竞价说明')||'';
+  const j = await api(`/short-stem-reviews/${id}/confirm`,'POST',body);
+  toast(`已确认：${DISP[disp]}${j.compensation_amount?('，差价 '+money(j.compensation_amount)):''}${j.credit_delta?('，花农信用 '+j.credit_delta):''}`);
+  vShortstem();
+});
+const disputeReview = run(async id=>{
+  const reason = prompt('异议理由（两组到货质检/到店复拍证据将封存，差价进入争议冻结）：','分拣时短枝比例正常，疑似运输或门店养护问题');
+  if(!reason) return;
+  await api(`/short-stem-reviews/${id}/dispute`,'POST',{reason});
+  toast('异议已提交，差价已冻结，等待争议关闭'); vShortstem();
+});
+const freezeReview = run(async id=>{
+  await api(`/short-stem-reviews/${id}/freeze`,'POST',{});
+  toast('差价已冻结，争议关闭前不计入花农结算'); vShortstem();
+});
+const closeDispute = run(async id=>{
+  const action = prompt('关闭争议：uphold维持原判 / adjust调整差价 / waive免除账扣：','uphold');
+  if(!['uphold','adjust','waive'].includes(action)) return toast('动作无效',true);
+  const body = {action, note:prompt('关闭说明：','')||''};
+  if(action==='adjust') body.amount = +(prompt('调整后差价金额：','')||0);
+  const j = await api(`/short-stem-reviews/${id}/close-dispute`,'POST',body);
+  toast(`争议已关闭：${({closed_uphold:'维持原判',closed_adjusted:'调整差价',closed_waived:'免除账扣'})[j.dispute_status]}`);
+  vShortstem();
+});
+const ackReview = run(async id=>{
+  const j = await api(`/short-stem-reviews/${id}/acknowledge`,'POST',{});
+  toast(`已确认账扣 ${money(j.amount)}，状态同步花农端，将计入月度结算`); vShortstem();
+});
+
 const VIEWS = { dash:vDash, batches:vBatches, qc:vQC, storage:vStorage, auctions:vAuctions,
   inventory:vInventory, market:vMarket, orders:vOrders, deliveries:vDeliveries,
-  returns:vReturns, finance:vFinance, admin:vAdmin };
+  returns:vReturns, shortstem:vShortstem, finance:vFinance, admin:vAdmin };
 
 /* ---------------- 启动 ---------------- */
 (async function(){

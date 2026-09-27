@@ -118,15 +118,57 @@ func (a *app) handleAnalyticsOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	out["credit_risk"] = creditRisk
 
+	// 短枝损耗复核：待确认 / 异议冻结中 / 冻结差价 / 花农已确认账扣
+	shortStem := map[string]any{}
+	var requestedN, disputedN int
+	var frozenAmt, confirmedAmt float64
+	a.db.QueryRowContext(ctx,
+		`SELECT count(*) FILTER (WHERE rv.status='requested'),
+		        count(*) FILTER (WHERE rv.status='disputed'),
+		        COALESCE(SUM(l.amount) FILTER (WHERE l.status='frozen'),0),
+		        COALESCE(SUM(l.amount) FILTER (WHERE l.status IN ('confirmed','deducted')),0)
+		 FROM short_stem_reviews rv LEFT JOIN review_ledger l ON l.review_id=rv.id`).
+		Scan(&requestedN, &disputedN, &frozenAmt, &confirmedAmt)
+	shortStem["requested"] = requestedN
+	shortStem["disputed"] = disputedN
+	shortStem["frozen_amount"] = round2(frozenAmt)
+	shortStem["confirmed_amount"] = round2(confirmedAmt)
+	// 按品类汇总短枝复核（高于竞价说明的短枝反馈）
+	ssRows, err := a.db.QueryContext(ctx,
+		`SELECT b.category, b.origin, count(*),
+		        COALESCE(avg(rv.observed_short_ratio-rv.declared_short_ratio),0),
+		        COALESCE(SUM(rv.compensation_amount) FILTER (WHERE rv.status='acknowledged'),0)
+		 FROM short_stem_reviews rv JOIN flower_batches b ON b.id=rv.batch_id
+		 GROUP BY 1,2 ORDER BY count(*) DESC LIMIT 50`)
+	ssItems := []map[string]any{}
+	if err == nil {
+		for ssRows.Next() {
+			var cat, origin string
+			var n int
+			var gap, amt float64
+			if ssRows.Scan(&cat, &origin, &n, &gap, &amt) == nil {
+				ssItems = append(ssItems, map[string]any{
+					"category": cat, "origin": origin, "reviews": n,
+					"avg_ratio_gap_pct": round2(gap * 100), "compensated_amount": round2(amt),
+				})
+			}
+		}
+		ssRows.Close()
+	}
+	shortStem["by_category"] = ssItems
+	out["short_stem"] = shortStem
+
 	// 运营计数
 	counts := map[string]int64{}
 	for k, q := range map[string]string{
-		"active_auctions":   `SELECT count(*) FROM auctions WHERE status='active'`,
-		"pending_orders":    `SELECT count(*) FROM orders WHERE status='pending_payment'`,
-		"timeout_orders":    `SELECT count(*) FROM orders WHERE status='timeout_cancelled'`,
-		"requested_returns": `SELECT count(*) FROM returns WHERE status='requested'`,
-		"expired_batches":   `SELECT count(*) FROM flower_batches WHERE status='expired'`,
-		"stored_batches":    `SELECT count(*) FROM flower_batches WHERE status IN ('stored','in_auction')`,
+		"active_auctions":              `SELECT count(*) FROM auctions WHERE status='active'`,
+		"pending_orders":               `SELECT count(*) FROM orders WHERE status='pending_payment'`,
+		"timeout_orders":               `SELECT count(*) FROM orders WHERE status='timeout_cancelled'`,
+		"requested_returns":            `SELECT count(*) FROM returns WHERE status='requested'`,
+		"requested_short_stem_reviews": `SELECT count(*) FROM short_stem_reviews WHERE status='requested'`,
+		"disputed_short_stem_reviews":  `SELECT count(*) FROM short_stem_reviews WHERE status='disputed'`,
+		"expired_batches":              `SELECT count(*) FROM flower_batches WHERE status='expired'`,
+		"stored_batches":               `SELECT count(*) FROM flower_batches WHERE status IN ('stored','in_auction')`,
 	} {
 		var n int64
 		if err := a.db.QueryRowContext(ctx, q).Scan(&n); err == nil {
@@ -167,7 +209,7 @@ func (a *app) handleAnalyticsStability(w http.ResponseWriter, r *http.Request) {
 		if rows.Scan(&origin, &cat, &batches, &gradeAvg, &tempOK, &clean) == nil {
 			stats[key{origin, cat}] = &map[string]any{
 				"origin": origin, "category": cat, "batches": batches,
-				"grade_avg": round2(gradeAvg), "temp_ok_rate": round2(tempOK*100), "clean_rate": round2(clean*100),
+				"grade_avg": round2(gradeAvg), "temp_ok_rate": round2(tempOK * 100), "clean_rate": round2(clean * 100),
 				"sold_bundles": 0, "returned_bundles": 0, "return_rate_pct": 0.0,
 			}
 		}
